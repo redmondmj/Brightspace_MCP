@@ -21,6 +21,10 @@ function normalizeTerm(term?: string | null): string {
   return term?.trim() ?? '';
 }
 
+function asBooleanOrUndefined(value?: boolean | null): boolean | undefined {
+  return typeof value === 'boolean' ? value : undefined;
+}
+
 function computeSubmissionState(submission?: CanvasSubmission): SubmissionState {
   if (!submission) {
     return 'unsubmitted';
@@ -165,9 +169,9 @@ export function mapFile(raw: CanvasFile): FileResource {
     size: raw.size,
     created_at: toCanvasTimezone(raw.created_at) ?? raw.created_at,
     updated_at: toCanvasTimezone(raw.updated_at) ?? raw.updated_at,
-    locked: raw.locked,
-    hidden: raw.hidden,
-    locked_for_user: raw.locked_for_user,
+    locked: asBooleanOrUndefined(raw.locked),
+    hidden: asBooleanOrUndefined(raw.hidden),
+    locked_for_user: asBooleanOrUndefined(raw.locked_for_user),
     thumbnail_url: raw.thumbnail_url,
     mime_class: raw.mime_class
   };
@@ -183,11 +187,11 @@ export function mapFolder(raw: CanvasFolder): Folder {
     parent_folder_id: raw.parent_folder_id,
     created_at: toCanvasTimezone(raw.created_at) ?? raw.created_at,
     updated_at: toCanvasTimezone(raw.updated_at) ?? raw.updated_at,
-    locked: raw.locked,
+    locked: asBooleanOrUndefined(raw.locked),
     folders_count: raw.folders_count,
     files_count: raw.files_count,
-    hidden: raw.hidden,
-    locked_for_user: raw.locked_for_user,
-    for_submissions: raw.for_submissions
+    hidden: asBooleanOrUndefined(raw.hidden),
+    locked_for_user: asBooleanOrUndefined(raw.locked_for_user),
+    for_submissions: asBooleanOrUndefined(raw.for_submissions)
   };
 }

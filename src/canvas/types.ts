@@ -78,15 +78,15 @@ export interface CanvasFile {
   created_at?: string;
   updated_at?: string;
   unlock_at?: string | null;
-  locked?: boolean;
-  hidden?: boolean;
+  locked?: boolean | null;
+  hidden?: boolean | null;
   lock_at?: string | null;
-  hidden_for_user?: boolean;
+  hidden_for_user?: boolean | null;
   thumbnail_url?: string | null;
   modified_at?: string;
   mime_class?: string;
   media_entry_id?: string | null;
-  locked_for_user?: boolean;
+  locked_for_user?: boolean | null;
   lock_explanation?: string;
 }
 
@@ -99,14 +99,14 @@ export interface CanvasFolder {
   parent_folder_id?: number | null;
   created_at?: string;
   updated_at?: string;
-  locked?: boolean;
+  locked?: boolean | null;
   folders_url?: string;
   files_url?: string;
   files_count?: number;
   folders_count?: number;
-  hidden?: boolean;
-  locked_for_user?: boolean;
-  for_submissions?: boolean;
+  hidden?: boolean | null;
+  locked_for_user?: boolean | null;
+  for_submissions?: boolean | null;
 }
 
 export interface CanvasFilePublicUrl {

@@ -117,4 +117,43 @@ describe('mappers', () => {
     expect(file.created_at).toBe('2024-06-30T17:00:00-07:00');
     expect(file.updated_at).toBe('2024-06-30T18:00:00-07:00');
   });
+
+  it('normalizes nullable file booleans from Canvas', async () => {
+    const envModule = await import('../core/env.js');
+    envModule.resetEnvCacheForTesting();
+    const mappers = await import('../tools/mappers.js');
+
+    const file = mappers.mapFile({
+      id: 7,
+      display_name: 'x',
+      filename: 'x.txt',
+      locked: null,
+      hidden: null,
+      locked_for_user: null
+    });
+
+    expect(file.locked).toBeUndefined();
+    expect(file.hidden).toBeUndefined();
+    expect(file.locked_for_user).toBeUndefined();
+  });
+
+  it('normalizes nullable folder booleans from Canvas', async () => {
+    const envModule = await import('../core/env.js');
+    envModule.resetEnvCacheForTesting();
+    const mappers = await import('../tools/mappers.js');
+
+    const folder = mappers.mapFolder({
+      id: 42,
+      name: 'Uploads',
+      hidden: null,
+      locked: null,
+      locked_for_user: null,
+      for_submissions: null
+    });
+
+    expect(folder.hidden).toBeUndefined();
+    expect(folder.locked).toBeUndefined();
+    expect(folder.locked_for_user).toBeUndefined();
+    expect(folder.for_submissions).toBeUndefined();
+  });
 });
