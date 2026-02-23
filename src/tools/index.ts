@@ -37,6 +37,7 @@ import {
 } from './mappers.js';
 
 const DEFAULT_COURSE_LIMIT = 20;
+const UPCOMING_ASSIGNMENT_CONCURRENCY = 5;
 const YEAR_REGEX = /(20\d{2})/;
 const TERM_ORDER: Array<{ keyword: string; rank: number }> = [
   { keyword: 'winter', rank: 1 },
@@ -119,6 +120,36 @@ function wrapTool<TArgs, TResult extends Record<string, unknown>>(
       });
       throw new McpError(ErrorCode.InternalError, 'Unexpected error');
     }
+  };
+}
+
+function createConcurrencyLimiter(maxConcurrent: number) {
+  const limit = Math.max(1, Math.floor(maxConcurrent));
+  let active = 0;
+  const queue: Array<() => void> = [];
+
+  return async function run<T>(fn: () => Promise<T>): Promise<T> {
+    return new Promise((resolve, reject) => {
+      const execute = () => {
+        active += 1;
+        fn()
+          .then(resolve)
+          .catch(reject)
+          .finally(() => {
+            active -= 1;
+            const next = queue.shift();
+            if (next) {
+              next();
+            }
+          });
+      };
+
+      if (active < limit) {
+        execute();
+      } else {
+        queue.push(execute);
+      }
+    });
   };
 }
 
@@ -469,7 +500,8 @@ function registerListAnnouncements(server: McpServer, deps: ToolDependencies): v
 
 function registerListUpcoming(server: McpServer, deps: ToolDependencies): void {
   const inputSchema = {
-    days: z.number().int().min(1).max(30).optional()
+    days: z.number().int().min(1).max(30).optional(),
+    max_courses: z.number().int().min(1).max(100).optional()
   } satisfies Record<string, z.ZodTypeAny>;
 
   server.registerTool(
@@ -480,7 +512,7 @@ function registerListUpcoming(server: McpServer, deps: ToolDependencies): void {
       inputSchema,
       outputSchema: listUpcomingOutputSchema.shape
     },
-    wrapTool('list_upcoming', async (args: { days?: number }) => {
+    wrapTool('list_upcoming', async (args: { days?: number; max_courses?: number }) => {
       const rangeDays = args.days ?? 7;
       const now = new Date();
       const rangeEnd = new Date(now.getTime() + rangeDays * 24 * 60 * 60 * 1000);
@@ -527,25 +559,69 @@ function registerListUpcoming(server: McpServer, deps: ToolDependencies): void {
       }
       metaStatuses.push(coursesResult.status);
 
-      for (const course of coursesResult.data) {
-        let assignmentsResult: CanvasResult<CanvasAssignment[]>;
-        try {
-          assignmentsResult = await deps.canvas.getAll<CanvasAssignment>(
-            `/api/v1/courses/${course.id}/assignments`,
-            {
-              'include[]': ['submission'],
-              bucket: 'upcoming'
+      const maxCourses = args.max_courses ?? coursesResult.data.length;
+      const courses = coursesResult.data.slice(0, maxCourses);
+      const limitAssignments = createConcurrencyLimiter(UPCOMING_ASSIGNMENT_CONCURRENCY);
+
+      type AssignmentSuccess = {
+        course: CanvasCourse;
+        assignmentsResult: CanvasResult<CanvasAssignment[]>;
+      };
+      type AssignmentFailure = { course: CanvasCourse; error: unknown; isAuthFailure: boolean };
+      type AssignmentFetchResult = AssignmentSuccess | AssignmentFailure;
+
+      const assignmentResults: AssignmentFetchResult[] = await Promise.all(
+        courses.map((course) =>
+          limitAssignments(async () => {
+            try {
+              const assignmentsResult = await deps.canvas.getAll<CanvasAssignment>(
+                `/api/v1/courses/${course.id}/assignments`,
+                {
+                  'include[]': ['submission'],
+                  bucket: 'upcoming'
+                }
+              );
+
+              return { course, assignmentsResult };
+            } catch (error) {
+              const isAuthFailure =
+                error instanceof AppError && error.code === 'AUTHORIZATION_FAILED';
+              if (isAuthFailure) {
+                log(
+                  'warn',
+                  'Skipping course for upcoming assignments due to authorization error',
+                  { course_id: course.id }
+                );
+                return { course, error, isAuthFailure };
+              }
+
+              log('warn', 'Skipping course for upcoming assignments due to error', {
+                course_id: course.id,
+                error: error instanceof Error ? error.message : String(error),
+                code: error instanceof AppError ? error.code : undefined
+              });
+              return { course, error, isAuthFailure: false };
             }
-          );
-        } catch (error) {
-          if (error instanceof AppError && error.code === 'AUTHORIZATION_FAILED') {
-            log('warn', 'Skipping course for upcoming assignments due to authorization error', {
-              course_id: course.id
-            });
-            continue;
+          })
+        )
+      );
+
+      let assignmentSuccessCount = 0;
+      let assignmentAuthFailureCount = 0;
+      let assignmentNonAuthFailureCount = 0;
+
+      for (const result of assignmentResults) {
+        if (!('assignmentsResult' in result)) {
+          if (result?.isAuthFailure) {
+            assignmentAuthFailureCount += 1;
+          } else if (result) {
+            assignmentNonAuthFailureCount += 1;
           }
-          throw error;
+          continue;
         }
+
+        const { course, assignmentsResult } = result;
+        assignmentSuccessCount += 1;
 
         if (assignmentsResult.requestIds) {
           metaRequestIds.push(...assignmentsResult.requestIds);
@@ -569,6 +645,28 @@ function registerListUpcoming(server: McpServer, deps: ToolDependencies): void {
             upcomingMap.set(mapped.id, mapped);
           }
         }
+      }
+
+      if (courses.length > 0 && assignmentSuccessCount === 0) {
+        const details = {
+          courseCount: courses.length,
+          authFailures: assignmentAuthFailureCount,
+          nonAuthFailures: assignmentNonAuthFailureCount
+        };
+        if (assignmentNonAuthFailureCount > 0) {
+          throw new AppError(
+            'CANVAS_UNAVAILABLE',
+            'Failed to fetch upcoming assignments for all courses.',
+            503,
+            { details }
+          );
+        }
+        throw new AppError(
+          'AUTHORIZATION_FAILED',
+          'Authorization failed for all courses when fetching assignments.',
+          403,
+          { details }
+        );
       }
 
       const upcoming = Array.from(upcomingMap.values()).sort((a, b) => {
