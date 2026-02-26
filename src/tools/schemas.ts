@@ -69,6 +69,45 @@ export const listUpcomingOutputSchema = z.object({
   upcoming: z.array(upcomingItemSchema)
 });
 
+export const courseMaterialTopicSchema = z.object({
+  id: z.number(),
+  title: z.string(),
+  url: z.string().optional(),
+  type: z.string().optional(),
+  start_at: z.string().nullable().optional(),
+  end_at: z.string().nullable().optional(),
+  is_hidden: z.boolean().optional(),
+  is_locked: z.boolean().optional(),
+  is_broken: z.boolean().optional(),
+  activity_type: z.string().optional()
+});
+
+export type CourseMaterialTopic = z.infer<typeof courseMaterialTopicSchema>;
+
+export type CourseMaterialModule = {
+  id: number;
+  title: string;
+  start_at?: string | null;
+  end_at?: string | null;
+  modules: CourseMaterialModule[];
+  topics: CourseMaterialTopic[];
+};
+
+export const courseMaterialModuleSchema: z.ZodType<CourseMaterialModule> = z.lazy(() =>
+  z.object({
+    id: z.number(),
+    title: z.string(),
+    start_at: z.string().nullable().optional(),
+    end_at: z.string().nullable().optional(),
+    modules: z.array(courseMaterialModuleSchema),
+    topics: z.array(courseMaterialTopicSchema)
+  })
+);
+
+export const listCourseMaterialsOutputSchema = z.object({
+  modules: z.array(courseMaterialModuleSchema)
+});
+
 export const fileSchema = z.object({
   id: z.number(),
   uuid: z.string().optional(),
@@ -84,7 +123,8 @@ export const fileSchema = z.object({
   hidden: z.boolean().optional(),
   locked_for_user: z.boolean().optional(),
   thumbnail_url: z.string().nullable().optional(),
-  mime_class: z.string().optional()
+  mime_class: z.string().optional(),
+  path: z.string().optional()
 });
 
 export type FileResource = z.infer<typeof fileSchema>;
@@ -106,7 +146,8 @@ export const folderSchema = z.object({
   files_count: z.number().optional(),
   hidden: z.boolean().optional(),
   locked_for_user: z.boolean().optional(),
-  for_submissions: z.boolean().optional()
+  for_submissions: z.boolean().optional(),
+  path: z.string().optional()
 });
 
 export type Folder = z.infer<typeof folderSchema>;
@@ -121,7 +162,8 @@ export const getFileOutputSchema = z.object({
 
 export const getFileDownloadUrlOutputSchema = z.object({
   file_id: z.number(),
-  download_url: z.string()
+  download_url: z.string(),
+  path: z.string().optional()
 });
 
 export const listFoldersOutputSchema = z.object({

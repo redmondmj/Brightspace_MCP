@@ -1,28 +1,30 @@
 import { loadEnv } from './core/env.js';
 import { log } from './core/logger.js';
-import { CanvasClient } from './canvas/client.js';
+import { BrightspaceClient } from './brightspace/client.js';
 import { startServer } from './mcp/server.js';
 
 async function main(): Promise<void> {
   const env = loadEnv();
 
-  const client = new CanvasClient({
-    baseUrl: env.canvasBaseUrl,
-    pat: env.CANVAS_PAT,
-    clientId: env.CANVAS_CLIENT_ID,
-    clientSecret: env.CANVAS_CLIENT_SECRET,
-    accessToken: env.CANVAS_ACCESS_TOKEN,
-    refreshToken: env.CANVAS_REFRESH_TOKEN,
-    httpTimeoutMs: env.canvasHttpTimeoutMs
+  const client = new BrightspaceClient({
+    baseUrl: env.brightspaceBaseUrl,
+    authHost: env.brightspaceAuthHost,
+    accessToken: env.BRIGHTSPACE_ACCESS_TOKEN,
+    clientId: env.BRIGHTSPACE_CLIENT_ID,
+    clientSecret: env.BRIGHTSPACE_CLIENT_SECRET,
+    refreshToken: env.BRIGHTSPACE_REFRESH_TOKEN,
+    httpTimeoutMs: env.brightspaceHttpTimeoutMs,
+    lpVersion: env.brightspaceLpVersion,
+    leVersion: env.brightspaceLeVersion
   });
 
   const port = parsePort(process.env.PORT) ?? 3333;
   const enableStdio = process.argv.includes('--stdio') || process.env.MCP_STDIO === '1';
 
-  log('info', 'Starting Canvas MCP server', { port, enable_stdio: enableStdio });
+  log('info', 'Starting Brightspace MCP server', { port, enable_stdio: enableStdio });
 
   await startServer({
-    canvasClient: client,
+    brightspaceClient: client,
     bearerToken: env.MCP_BEARER,
     port,
     enableStdio,

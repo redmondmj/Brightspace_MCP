@@ -1,95 +1,62 @@
 import {
-  CanvasAnnouncement,
-  CanvasAssignment,
-  CanvasCourse,
-  CanvasFile,
-  CanvasFolder,
-  CanvasSubmission
-} from '../canvas/types.js';
+  BrightspaceContentModule,
+  BrightspaceContentTopic,
+  BrightspaceDropboxFolder,
+  BrightspaceMyOrgUnitInfo,
+  BrightspaceNewsItem
+} from '../brightspace/types.js';
 import {
   Announcement,
   Assignment,
   Course,
+  CourseMaterialModule,
+  CourseMaterialTopic,
   FileResource,
   Folder,
-  SubmissionState,
   UpcomingItem
 } from './schemas.js';
-import { toCanvasTimezone } from '../core/timezone.js';
+import { toBrightspaceTimezone } from '../core/timezone.js';
 
 function normalizeTerm(term?: string | null): string {
   return term?.trim() ?? '';
 }
 
-function asBooleanOrUndefined(value?: boolean | null): boolean | undefined {
-  return typeof value === 'boolean' ? value : undefined;
-}
-
-function computeSubmissionState(submission?: CanvasSubmission): SubmissionState {
-  if (!submission) {
-    return 'unsubmitted';
+function normalizeCourseCode(code?: string | null, id?: number): string {
+  const trimmed = typeof code === 'string' ? code.trim() : '';
+  if (trimmed) {
+    return trimmed;
   }
-
-  if (submission.excused) {
-    return 'excused';
-  }
-
-  const state = submission.workflow_state;
-  switch (state) {
-    case 'graded':
-      return 'graded';
-    case 'pending_review':
-      return 'pending_review';
-    case 'submitted':
-      return submission.late ? 'late' : 'submitted';
-    case 'unsubmitted':
-      return submission.missing ? 'missing' : 'unsubmitted';
-    default:
-      if (submission.missing) {
-        return 'missing';
-      }
-      return 'unsubmitted';
-  }
-}
-
-function ensureCourseId(id: number | undefined, fallback?: string): number {
   if (typeof id === 'number' && Number.isFinite(id)) {
-    return id;
+    return `COURSE-${id}`;
   }
-
-  if (!fallback) {
-    return 0;
-  }
-
-  const [, courseId] = fallback.split('_');
-  const parsed = Number(courseId);
-  return Number.isFinite(parsed) ? parsed : 0;
+  return 'COURSE-UNKNOWN';
 }
 
-export function mapCourse(raw: CanvasCourse): Course {
-  const trimmedName = typeof raw.name === 'string' ? raw.name.trim() : '';
-  const trimmedCourseCode =
-    typeof raw.course_code === 'string' ? raw.course_code.trim() : '';
-  const safeCourseCode = trimmedCourseCode || `COURSE-${raw.id}`;
-  const safeName = trimmedName || safeCourseCode || `Course ${raw.id}`;
+export function mapCourse(raw: BrightspaceMyOrgUnitInfo): Course {
+  const orgUnit = raw.OrgUnit;
+  const id = orgUnit?.Id ?? 0;
+  const name = typeof orgUnit?.Name === 'string' && orgUnit.Name.trim()
+    ? orgUnit.Name.trim()
+    : normalizeCourseCode(orgUnit?.Code ?? null, id);
 
   return {
-    id: raw.id,
-    name: safeName,
-    term: normalizeTerm(raw.term?.name ?? null),
-    course_code: safeCourseCode
+    id,
+    name,
+    term: normalizeTerm(orgUnit?.Type?.Name ?? null),
+    course_code: normalizeCourseCode(orgUnit?.Code ?? null, id)
   };
 }
 
-export function mapAssignment(raw: CanvasAssignment, source?: 'todo' | 'assignment'): Assignment | UpcomingItem {
+export function mapAssignment(raw: BrightspaceDropboxFolder, courseId: number, source?: 'todo' | 'assignment'):
+  | Assignment
+  | UpcomingItem {
   const base: Assignment = {
-    id: raw.id,
-    course_id: raw.course_id,
-    name: raw.name,
-    due_at: toCanvasTimezone(raw.due_at) ?? null,
-    points: typeof raw.points_possible === 'number' ? raw.points_possible : null,
-    html_url: raw.html_url,
-    submission_state: computeSubmissionState(raw.submission)
+    id: raw.Id,
+    course_id: courseId,
+    name: raw.Name,
+    due_at: toBrightspaceTimezone(raw.DueDate ?? null) ?? null,
+    points: null,
+    html_url: ''
   };
 
   if (!source) {
@@ -102,96 +69,74 @@ export function mapAssignment(raw: CanvasAssignment, source?: 'todo' | 'assignme
   } satisfies UpcomingItem;
 }
 
-export function mapAnnouncement(raw: CanvasAnnouncement): Announcement {
+export function mapAnnouncement(raw: BrightspaceNewsItem, courseId: number): Announcement {
+  const postedAt = raw.StartDate ?? raw.CreatedDate ?? raw.LastModifiedDate ?? null;
+
   return {
-    id: raw.id,
-    course_id: ensureCourseId(raw.course_id, raw.context_code),
-    title: raw.title,
-    posted_at: toCanvasTimezone(raw.posted_at) ?? raw.posted_at,
-    html_url: raw.html_url
+    id: raw.Id,
+    course_id: courseId,
+    title: raw.Title,
+    posted_at: toBrightspaceTimezone(postedAt) ?? postedAt ?? '',
+    html_url: ''
   };
 }
 
-export function mapUpcomingFromAssignment(
-  assignment: CanvasAssignment,
-  source: 'todo' | 'assignment'
-): UpcomingItem {
-  return mapAssignment(assignment, source) as UpcomingItem;
+export function mapCourseMaterials(modules: BrightspaceContentModule[] | null | undefined): CourseMaterialModule[] {
+  if (!modules || modules.length === 0) {
+    return [];
+  }
+
+  return modules.map(mapModule);
 }
 
-export function normalizePlannerItem(
-  assignment: CanvasAssignment | undefined,
-  planner: {
-    course_id?: number;
-    plannable_id: number;
-    plannable?: {
-      id: number;
-      title?: string;
-      due_at?: string | null;
-      html_url?: string;
-    };
-    html_url?: string;
-  }
-): CanvasAssignment | undefined {
-  if (!assignment && planner.plannable) {
-    const plannable = planner.plannable;
-    return {
-      id: planner.plannable_id,
-      course_id: planner.course_id ?? 0,
-      name: plannable.title ?? 'Untitled',
-      due_at: plannable.due_at ?? null,
-      points_possible: null,
-      html_url: plannable.html_url ?? planner.html_url ?? ''
-    };
-  }
-
-  if (assignment) {
-    return {
-      ...assignment,
-      course_id: assignment.course_id || planner.course_id || 0,
-      html_url: assignment.html_url || planner.html_url || '',
-      due_at: assignment.due_at ?? planner.plannable?.due_at ?? null
-    };
-  }
-
-  return undefined;
-}
-
-export function mapFile(raw: CanvasFile): FileResource {
+function mapModule(module: BrightspaceContentModule): CourseMaterialModule {
   return {
-    id: raw.id,
-    uuid: raw.uuid,
-    folder_id: raw.folder_id,
-    display_name: raw.display_name,
-    filename: raw.filename,
-    content_type: raw['content-type'],
-    url: raw.url,
-    size: raw.size,
-    created_at: toCanvasTimezone(raw.created_at) ?? raw.created_at,
-    updated_at: toCanvasTimezone(raw.updated_at) ?? raw.updated_at,
-    locked: asBooleanOrUndefined(raw.locked),
-    hidden: asBooleanOrUndefined(raw.hidden),
-    locked_for_user: asBooleanOrUndefined(raw.locked_for_user),
-    thumbnail_url: raw.thumbnail_url,
-    mime_class: raw.mime_class
+    id: module.ModuleId,
+    title: module.Title,
+    start_at: toBrightspaceTimezone(module.StartDateTime ?? null) ?? module.StartDateTime ?? null,
+    end_at: toBrightspaceTimezone(module.EndDateTime ?? null) ?? module.EndDateTime ?? null,
+    modules: mapCourseMaterials(module.Modules),
+    topics: (module.Topics ?? []).map(mapTopic)
   };
 }
 
-export function mapFolder(raw: CanvasFolder): Folder {
+function mapTopic(topic: BrightspaceContentTopic): CourseMaterialTopic {
   return {
-    id: raw.id,
-    name: raw.name,
-    full_name: raw.full_name,
-    context_id: raw.context_id,
-    context_type: raw.context_type,
-    parent_folder_id: raw.parent_folder_id,
-    created_at: toCanvasTimezone(raw.created_at) ?? raw.created_at,
-    updated_at: toCanvasTimezone(raw.updated_at) ?? raw.updated_at,
-    locked: asBooleanOrUndefined(raw.locked),
-    folders_count: raw.folders_count,
-    files_count: raw.files_count,
-    hidden: asBooleanOrUndefined(raw.hidden),
-    locked_for_user: asBooleanOrUndefined(raw.locked_for_user),
-    for_submissions: asBooleanOrUndefined(raw.for_submissions)
+    id: topic.TopicId,
+    title: topic.Title,
+    url: topic.Url ?? undefined,
+    type: topic.TypeIdentifier ?? undefined,
+    start_at: toBrightspaceTimezone(topic.StartDateTime ?? null) ?? topic.StartDateTime ?? null,
+    end_at: toBrightspaceTimezone(topic.EndDateTime ?? null) ?? topic.EndDateTime ?? null,
+    is_hidden: topic.IsHidden ?? undefined,
+    is_locked: topic.IsLocked ?? undefined,
+    is_broken: topic.IsBroken ?? undefined,
+    activity_type: topic.ActivityType ?? undefined
   };
+}
+
+export function mapFile(raw: { Name: string; path: string }): FileResource {
+  return {
+    id: fileIdFromPath(raw.path),
+    display_name: raw.Name,
+    filename: raw.Name,
+    path: raw.path
+  };
+}
+
+export function mapFolder(raw: { Name: string; path: string }): Folder {
+  return {
+    id: fileIdFromPath(raw.path),
+    name: raw.Name,
+    full_name: raw.path,
+    path: raw.path
+  };
+}
+
+export function fileIdFromPath(path: string): number {
+  let hash = 0;
+  for (let i = 0; i < path.length; i += 1) {
+    hash = (hash * 31 + path.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash);
 }

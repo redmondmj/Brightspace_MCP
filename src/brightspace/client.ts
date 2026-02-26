@@ -1,64 +1,88 @@
 import { fetch, type Response } from 'undici';
 
 import { sleep } from '../core/async.js';
-import { canvasError, canvasTimeoutError, unknownError } from '../core/errors.js';
+import { brightspaceError, brightspaceTimeoutError, unknownError } from '../core/errors.js';
 import { USER_AGENT } from '../core/meta.js';
-import {
-  CanvasAuthStrategy,
-  createAuthStrategy
-} from './auth.js';
+import { BrightspaceAuthStrategy, createAuthStrategy } from './auth.js';
 
-export interface CanvasClientOptions {
+export interface BrightspaceClientOptions {
   baseUrl: string;
-  pat?: string;
+  authHost: string;
+  accessToken?: string;
   clientId?: string;
   clientSecret?: string;
-  accessToken?: string;
   refreshToken?: string;
   maxRetries?: number;
-  defaultPerPage?: number;
   httpTimeoutMs?: number;
+  lpVersion: string;
+  leVersion: string;
 }
 
-export interface CanvasRequestOptions {
+export interface BrightspaceRequestOptions {
   signal?: AbortSignal;
 }
 
-export interface CanvasResult<T> {
+export interface BrightspaceResult<T> {
   data: T;
   status: number;
   requestId?: string;
   requestIds?: string[];
 }
 
-export class CanvasClient {
-  private readonly baseUrl: string;
-  private readonly auth: CanvasAuthStrategy;
-  private readonly maxRetries: number;
-  private readonly defaultPerPage: number;
-  private readonly httpTimeoutMs: number;
+interface PagedResultSet<T> {
+  PagingInfo?: {
+    Bookmark?: string | null;
+    HasMoreItems?: boolean;
+  } | null;
+  Items?: T[] | null;
+}
 
-  constructor(options: CanvasClientOptions) {
+interface ObjectListPage<T> {
+  Next?: string | null;
+  Objects?: T[] | null;
+}
+
+export class BrightspaceClient {
+  private readonly baseUrl: string;
+  private readonly auth: BrightspaceAuthStrategy;
+  private readonly maxRetries: number;
+  private readonly httpTimeoutMs: number;
+  private readonly lpVersion: string;
+  private readonly leVersion: string;
+
+  constructor(options: BrightspaceClientOptions) {
     this.baseUrl = options.baseUrl;
     this.maxRetries = options.maxRetries ?? 3;
-    this.defaultPerPage = options.defaultPerPage ?? 100;
     this.httpTimeoutMs = options.httpTimeoutMs ?? 15000;
+    this.lpVersion = options.lpVersion;
+    this.leVersion = options.leVersion;
 
     this.auth = createAuthStrategy({
-      baseUrl: this.baseUrl,
-      pat: options.pat,
+      authHost: options.authHost,
+      accessToken: options.accessToken,
       clientId: options.clientId,
       clientSecret: options.clientSecret,
-      accessToken: options.accessToken,
       refreshToken: options.refreshToken
     });
+  }
+
+  lp(path: string): string {
+    return `/d2l/api/lp/${this.lpVersion}${path}`;
+  }
+
+  le(path: string): string {
+    return `/d2l/api/le/${this.leVersion}${path}`;
+  }
+
+  resolveUrl(path: string, params?: Record<string, unknown>): URL {
+    return this.buildUrl(path, params);
   }
 
   async get<T>(
     path: string,
     params?: Record<string, unknown>,
-    options?: CanvasRequestOptions
-  ): Promise<CanvasResult<T>> {
+    options?: BrightspaceRequestOptions
+  ): Promise<BrightspaceResult<T>> {
     const url = this.buildUrl(path, params);
     const response = await this.fetchWithRetry(url, {
       method: 'GET',
@@ -68,19 +92,67 @@ export class CanvasClient {
     return this.handleResponse<T>(response);
   }
 
-  async getAll<T>(
+  async getPagedResultSet<T>(
     path: string,
     params?: Record<string, unknown>,
-    options?: CanvasRequestOptions
-  ): Promise<CanvasResult<T[]>> {
+    options?: BrightspaceRequestOptions
+  ): Promise<BrightspaceResult<T[]>> {
     const results: T[] = [];
     const requestIds: string[] = [];
     let status = 200;
+    let bookmark: string | null | undefined = undefined;
 
-    let nextUrl: URL | null = this.buildUrl(path, {
-      per_page: this.defaultPerPage,
-      ...params
-    });
+    do {
+      const response = await this.fetchWithRetry(
+        this.buildUrl(path, { ...params, bookmark: bookmark ?? undefined }),
+        {
+          method: 'GET',
+          signal: options?.signal
+        }
+      );
+
+      status = response.status;
+      const requestId = response.headers.get('x-request-id') ?? undefined;
+      if (requestId) {
+        requestIds.push(requestId);
+      }
+
+      const { ok, payload } = await this.parsePayload(response);
+
+      if (!ok) {
+        const message = extractBrightspaceMessage(payload);
+        throw brightspaceError(response.status, requestId, message, payload);
+      }
+
+      const normalized = payload as PagedResultSet<T> | null;
+      const items = normalized?.Items ?? [];
+      if (!Array.isArray(items)) {
+        throw unknownError('Expected Brightspace PagedResultSet.Items to be an array.', payload);
+      }
+
+      results.push(...items);
+      const pagingInfo = normalized?.PagingInfo ?? undefined;
+      const hasMore = Boolean(pagingInfo?.HasMoreItems);
+      bookmark = hasMore ? pagingInfo?.Bookmark ?? null : null;
+    } while (bookmark);
+
+    return {
+      data: results,
+      status,
+      requestId: requestIds.at(-1),
+      requestIds: requestIds.length ? requestIds : undefined
+    };
+  }
+
+  async getObjectListPage<T>(
+    path: string,
+    params?: Record<string, unknown>,
+    options?: BrightspaceRequestOptions
+  ): Promise<BrightspaceResult<T[]>> {
+    const results: T[] = [];
+    const requestIds: string[] = [];
+    let status = 200;
+    let nextUrl: URL | null = this.buildUrl(path, params);
 
     while (nextUrl) {
       const response = await this.fetchWithRetry(nextUrl, {
@@ -97,18 +169,29 @@ export class CanvasClient {
       const { ok, payload } = await this.parsePayload(response);
 
       if (!ok) {
-        const message = extractCanvasMessage(payload);
-        throw canvasError(response.status, requestId, message, payload);
+        const message = extractBrightspaceMessage(payload);
+        throw brightspaceError(response.status, requestId, message, payload);
       }
 
-      if (!Array.isArray(payload)) {
-        throw unknownError('Expected a list response from Canvas.', payload);
+      const normalized = payload as ObjectListPage<T> | null;
+      const objects = normalized?.Objects ?? [];
+      if (!Array.isArray(objects)) {
+        throw unknownError('Expected Brightspace ObjectListPage.Objects to be an array.', payload);
       }
 
-      results.push(...(payload as T[]));
+      results.push(...objects);
 
-      const links = parseLinkHeader(response.headers.get('link'));
-      nextUrl = links.next ? new URL(links.next) : null;
+      const next = normalized?.Next;
+      if (!next) {
+        nextUrl = null;
+        continue;
+      }
+
+      try {
+        nextUrl = new URL(next, this.baseUrl);
+      } catch {
+        nextUrl = null;
+      }
     }
 
     return {
@@ -183,7 +266,7 @@ export class CanvasClient {
             return this.fetchWithRetry(url, init, attempt + 1);
           }
 
-          throw canvasTimeoutError(this.httpTimeoutMs, url.toString(), {
+          throw brightspaceTimeoutError(this.httpTimeoutMs, url.toString(), {
             attempts: attempt + 1
           });
         }
@@ -202,13 +285,13 @@ export class CanvasClient {
     }
   }
 
-  private async handleResponse<T>(response: Response): Promise<CanvasResult<T>> {
+  private async handleResponse<T>(response: Response): Promise<BrightspaceResult<T>> {
     const { ok, payload } = await this.parsePayload(response);
     const requestId = response.headers.get('x-request-id') ?? undefined;
 
     if (!ok) {
-      const message = extractCanvasMessage(payload);
-      throw canvasError(response.status, requestId, message, payload);
+      const message = extractBrightspaceMessage(payload);
+      throw brightspaceError(response.status, requestId, message, payload);
     }
 
     return {
@@ -231,7 +314,7 @@ export class CanvasClient {
       return { ok: response.ok, payload: JSON.parse(text) };
     } catch (error) {
       if (response.ok) {
-        throw unknownError('Canvas returned an unexpected payload format.', {
+        throw unknownError('Brightspace returned an unexpected payload format.', {
           contentType: response.headers.get('content-type'),
           body: text
         });
@@ -328,25 +411,7 @@ function parseRetryAfter(header: string | null | undefined): number | null {
   return null;
 }
 
-function parseLinkHeader(header: string | null): Record<string, string> {
-  if (!header) {
-    return {};
-  }
-
-  const entries: Record<string, string> = {};
-
-  for (const part of header.split(',')) {
-    const match = part.trim().match(/^<([^>]+)>;\s*rel="([^"]+)"/);
-    if (match) {
-      const [, url, rel] = match;
-      entries[rel] = url;
-    }
-  }
-
-  return entries;
-}
-
-function extractCanvasMessage(payload: unknown): string | undefined {
+function extractBrightspaceMessage(payload: unknown): string | undefined {
   if (!payload) {
     return undefined;
   }
@@ -357,7 +422,7 @@ function extractCanvasMessage(payload: unknown): string | undefined {
 
   if (Array.isArray(payload)) {
     const [first] = payload;
-    return extractCanvasMessage(first);
+    return extractBrightspaceMessage(first);
   }
 
   if (typeof payload !== 'object') {
@@ -370,35 +435,26 @@ function extractCanvasMessage(payload: unknown): string | undefined {
     return anyPayload.message;
   }
 
-  if (anyPayload.errors) {
-    const errors = anyPayload.errors;
+  if (typeof anyPayload.Message === 'string') {
+    return anyPayload.Message;
+  }
 
-    if (typeof errors === 'string') {
-      return errors;
+  if (typeof anyPayload.ErrorMessage === 'string') {
+    return anyPayload.ErrorMessage;
+  }
+
+  if (Array.isArray(anyPayload.Errors) && anyPayload.Errors.length > 0) {
+    const [first] = anyPayload.Errors;
+    if (typeof first === 'string') {
+      return first;
     }
-
-    if (Array.isArray(errors) && errors.length > 0) {
-      const [first] = errors;
-      if (typeof first === 'string') {
-        return first;
+    if (first && typeof first === 'object') {
+      const normalized = first as Record<string, unknown>;
+      if (typeof normalized.Message === 'string') {
+        return normalized.Message;
       }
-      if (first && typeof first === 'object') {
-        const normalized = first as Record<string, unknown>;
-        if (typeof normalized.message === 'string') {
-          return normalized.message;
-        }
-        if (typeof normalized.detail === 'string') {
-          return normalized.detail;
-        }
-      }
-    }
-
-    if (errors && typeof errors === 'object') {
-      for (const value of Object.values(errors as Record<string, unknown>)) {
-        const message = extractCanvasMessage(value);
-        if (message) {
-          return message;
-        }
+      if (typeof normalized.ErrorMessage === 'string') {
+        return normalized.ErrorMessage;
       }
     }
   }

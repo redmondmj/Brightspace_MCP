@@ -5,8 +5,8 @@ vi.mock('undici', () => ({
 }));
 
 import { fetch } from 'undici';
-import { createAuthStrategy } from '../canvas/auth.js';
-import { CanvasClient } from '../canvas/client.js';
+import { createAuthStrategy } from '../brightspace/auth.js';
+import { BrightspaceClient } from '../brightspace/client.js';
 
 const fetchMock = vi.mocked(fetch);
 
@@ -43,13 +43,13 @@ afterEach(() => {
 });
 
 describe('createAuthStrategy', () => {
-  it('uses PAT when provided', async () => {
+  it('uses access token when provided', async () => {
     const auth = createAuthStrategy({
-      baseUrl: 'https://canvas.example.com',
-      pat: 'pat-token'
+      authHost: 'https://auth.brightspace.com',
+      accessToken: 'access-token'
     });
 
-    await expect(auth.getAuthorizationHeader()).resolves.toBe('Bearer pat-token');
+    await expect(auth.getAuthorizationHeader()).resolves.toBe('Bearer access-token');
     await expect(auth.handleUnauthorized()).resolves.toBe(false);
   });
 
@@ -66,7 +66,7 @@ describe('createAuthStrategy', () => {
     );
 
     const auth = createAuthStrategy({
-      baseUrl: 'https://canvas.example.com',
+      authHost: 'https://auth.brightspace.com',
       clientId: 'client-id',
       clientSecret: 'client-secret',
       refreshToken: 'refresh-token'
@@ -75,7 +75,7 @@ describe('createAuthStrategy', () => {
     await expect(auth.getAuthorizationHeader()).resolves.toBe('Bearer new-access');
     expect(fetchMock).toHaveBeenCalledOnce();
     const [url, init] = fetchMock.mock.calls[0];
-    expect(String(url)).toBe('https://canvas.example.com/login/oauth2/token');
+    expect(String(url)).toBe('https://auth.brightspace.com/core/connect/token');
     expect(init?.method).toBe('POST');
     expect(init?.headers).toMatchObject({
       'Content-Type': 'application/x-www-form-urlencoded'
@@ -87,7 +87,7 @@ describe('createAuthStrategy', () => {
   });
 });
 
-describe('CanvasClient', () => {
+describe('BrightspaceClient', () => {
   it('builds URLs with array and date params', async () => {
     fetchMock.mockResolvedValueOnce(
       mockResponse({
@@ -96,12 +96,15 @@ describe('CanvasClient', () => {
       })
     );
 
-    const client = new CanvasClient({
-      baseUrl: 'https://canvas.example.com',
-      pat: 'pat-token'
+    const client = new BrightspaceClient({
+      baseUrl: 'https://brightspace.example.com',
+      authHost: 'https://auth.brightspace.com',
+      accessToken: 'access-token',
+      lpVersion: '1.49',
+      leVersion: '1.82'
     });
 
-    await client.get('/api/v1/items', {
+    await client.get('/d2l/api/lp/1.49/items', {
       include: ['a', 'b'],
       since: new Date('2024-01-01T00:00:00Z'),
       limit: 10,
@@ -110,21 +113,23 @@ describe('CanvasClient', () => {
 
     const [url] = fetchMock.mock.calls[0];
     const parsed = new URL(String(url));
-    expect(parsed.pathname).toBe('/api/v1/items');
+    expect(parsed.pathname).toBe('/d2l/api/lp/1.49/items');
     expect(parsed.searchParams.getAll('include')).toEqual(['a', 'b']);
     expect(parsed.searchParams.get('since')).toBe('2024-01-01T00:00:00.000Z');
     expect(parsed.searchParams.get('limit')).toBe('10');
     expect(parsed.searchParams.has('skip')).toBe(false);
   });
 
-  it('paginates getAll results and returns request IDs', async () => {
+  it('paginates PagedResultSet results and returns request IDs', async () => {
     fetchMock
       .mockResolvedValueOnce(
         mockResponse({
           status: 200,
-          json: [{ id: 1 }],
+          json: {
+            PagingInfo: { HasMoreItems: true, Bookmark: 'next' },
+            Items: [{ id: 1 }]
+          },
           headers: {
-            link: '<https://canvas.example.com/api/v1/items?page=2>; rel="next"',
             'x-request-id': 'req-1'
           }
         })
@@ -132,19 +137,65 @@ describe('CanvasClient', () => {
       .mockResolvedValueOnce(
         mockResponse({
           status: 200,
-          json: [{ id: 2 }],
+          json: {
+            PagingInfo: { HasMoreItems: false, Bookmark: null },
+            Items: [{ id: 2 }]
+          },
           headers: {
             'x-request-id': 'req-2'
           }
         })
       );
 
-    const client = new CanvasClient({
-      baseUrl: 'https://canvas.example.com',
-      pat: 'pat-token'
+    const client = new BrightspaceClient({
+      baseUrl: 'https://brightspace.example.com',
+      authHost: 'https://auth.brightspace.com',
+      accessToken: 'access-token',
+      lpVersion: '1.49',
+      leVersion: '1.82'
     });
 
-    const result = await client.getAll<{ id: number }>('/api/v1/items');
+    const result = await client.getPagedResultSet<{ id: number }>(
+      '/d2l/api/lp/1.49/items'
+    );
+
+    expect(result.data).toEqual([{ id: 1 }, { id: 2 }]);
+    expect(result.requestIds).toEqual(['req-1', 'req-2']);
+    expect(result.requestId).toBe('req-2');
+  });
+
+  it('paginates ObjectListPage results', async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        mockResponse({
+          status: 200,
+          json: { Next: '/d2l/api/lp/1.49/items?page=2', Objects: [{ id: 1 }] },
+          headers: {
+            'x-request-id': 'req-1'
+          }
+        })
+      )
+      .mockResolvedValueOnce(
+        mockResponse({
+          status: 200,
+          json: { Next: null, Objects: [{ id: 2 }] },
+          headers: {
+            'x-request-id': 'req-2'
+          }
+        })
+      );
+
+    const client = new BrightspaceClient({
+      baseUrl: 'https://brightspace.example.com',
+      authHost: 'https://auth.brightspace.com',
+      accessToken: 'access-token',
+      lpVersion: '1.49',
+      leVersion: '1.82'
+    });
+
+    const result = await client.getObjectListPage<{ id: number }>(
+      '/d2l/api/lp/1.49/items'
+    );
 
     expect(result.data).toEqual([{ id: 1 }, { id: 2 }]);
     expect(result.requestIds).toEqual(['req-1', 'req-2']);

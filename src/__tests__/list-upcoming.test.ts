@@ -11,7 +11,12 @@ function restoreEnv() {
   Object.assign(process.env, ORIGINAL_ENV);
 }
 
-async function loadListUpcomingHandler(canvas: { getAll: ReturnType<typeof vi.fn> }) {
+async function loadListUpcomingHandler(brightspace: {
+  getPagedResultSet: ReturnType<typeof vi.fn>;
+  get: ReturnType<typeof vi.fn>;
+  lp: ReturnType<typeof vi.fn>;
+  le: ReturnType<typeof vi.fn>;
+}) {
   const tools = new Map<string, unknown>();
   const server = {
     registerTool: (name: string, _meta: unknown, handler: unknown) => {
@@ -19,8 +24,8 @@ async function loadListUpcomingHandler(canvas: { getAll: ReturnType<typeof vi.fn
     }
   };
 
-  const { registerCanvasTools } = await import('../tools/index.js');
-  registerCanvasTools(server as never, { canvas: canvas as never });
+  const { registerBrightspaceTools } = await import('../tools/index.js');
+  registerBrightspaceTools(server as never, { brightspace: brightspace as never });
 
   const handler = tools.get('list_upcoming');
   if (!handler || typeof handler !== 'function') {
@@ -36,10 +41,13 @@ async function loadListUpcomingHandler(canvas: { getAll: ReturnType<typeof vi.fn
 beforeEach(() => {
   vi.resetModules();
   restoreEnv();
-  process.env.CANVAS_BASE_URL = 'https://canvas.example.com';
+  process.env.BRIGHTSPACE_BASE_URL = 'https://brightspace.example.com';
+  process.env.BRIGHTSPACE_AUTH_HOST = 'https://auth.brightspace.com';
   process.env.MCP_BEARER = 'test-bearer';
-  process.env.CANVAS_PAT = 'test-pat';
-  process.env.CANVAS_TIMEZONE = 'UTC';
+  process.env.BRIGHTSPACE_ACCESS_TOKEN = 'test-token';
+  process.env.BRIGHTSPACE_TIMEZONE = 'UTC';
+  process.env.BRIGHTSPACE_LP_VERSION = '1.49';
+  process.env.BRIGHTSPACE_LE_VERSION = '1.82';
   vi.useFakeTimers();
   vi.setSystemTime(new Date('2025-01-01T00:00:00Z'));
 });
@@ -52,49 +60,25 @@ afterEach(() => {
 
 describe('list_upcoming', () => {
   it('orders upcoming items by due date and respects max_courses', async () => {
-    const canvas = {
-      getAll: vi.fn(async (path: string) => {
-        if (path === '/api/v1/users/self/todo') {
+    const brightspace = {
+      lp: vi.fn((path: string) => `/d2l/api/lp/1.49${path}`),
+      le: vi.fn((path: string) => `/d2l/api/le/1.82${path}`),
+      getPagedResultSet: vi.fn(async (_path: string) => ({
+        data: [
+          { OrgUnit: { Id: 1, Name: 'Course 1', Code: 'C1' }, Access: { CanAccess: true } },
+          { OrgUnit: { Id: 2, Name: 'Course 2', Code: 'C2' }, Access: { CanAccess: true } }
+        ],
+        status: 200,
+        requestId: 'courses'
+      })),
+      get: vi.fn(async (path: string) => {
+        if (path === '/d2l/api/le/1.82/1/dropbox/folders/') {
           return {
             data: [
               {
-                type: 'grading',
-                assignment: {
-                  id: 10,
-                  course_id: 1,
-                  name: 'Todo',
-                  due_at: '2025-01-03T00:00:00Z',
-                  points_possible: 5,
-                  html_url: 'https://canvas.example.com/courses/1/assignments/10'
-                }
-              }
-            ],
-            status: 200,
-            requestId: 'todo'
-          };
-        }
-
-        if (path === '/api/v1/users/self/courses') {
-          return {
-            data: [
-              { id: 1, name: 'Course 1' },
-              { id: 2, name: 'Course 2' }
-            ],
-            status: 200,
-            requestId: 'courses'
-          };
-        }
-
-        if (path === '/api/v1/courses/1/assignments') {
-          return {
-            data: [
-              {
-                id: 20,
-                course_id: 1,
-                name: 'Assignment A',
-                due_at: '2025-01-02T00:00:00Z',
-                points_possible: 10,
-                html_url: 'https://canvas.example.com/courses/1/assignments/20'
+                Id: 20,
+                Name: 'Assignment A',
+                DueDate: '2025-01-02T00:00:00Z'
               }
             ],
             status: 200,
@@ -102,16 +86,13 @@ describe('list_upcoming', () => {
           };
         }
 
-        if (path === '/api/v1/courses/2/assignments') {
+        if (path === '/d2l/api/le/1.82/2/dropbox/folders/') {
           return {
             data: [
               {
-                id: 30,
-                course_id: 2,
-                name: 'Assignment B',
-                due_at: '2025-01-05T00:00:00Z',
-                points_possible: 10,
-                html_url: 'https://canvas.example.com/courses/2/assignments/30'
+                Id: 30,
+                Name: 'Assignment B',
+                DueDate: '2025-01-05T00:00:00Z'
               }
             ],
             status: 200,
@@ -123,58 +104,34 @@ describe('list_upcoming', () => {
       })
     };
 
-    const handler = await loadListUpcomingHandler(canvas);
+    const handler = await loadListUpcomingHandler(brightspace);
     const result = await handler({ days: 7, max_courses: 1 });
 
-    expect(result.structuredContent.upcoming.map((item) => item.id)).toEqual([20, 10]);
-    expect(canvas.getAll.mock.calls.some(([path]) => path === '/api/v1/courses/2/assignments'))
+    expect(result.structuredContent.upcoming.map((item) => item.id)).toEqual([20]);
+    expect(brightspace.get.mock.calls.some(([path]) => path === '/d2l/api/le/1.82/2/dropbox/folders/'))
       .toBe(false);
   });
 
   it('skips courses that fail assignment fetches', async () => {
-    const canvas = {
-      getAll: vi.fn(async (path: string) => {
-        if (path === '/api/v1/users/self/todo') {
+    const brightspace = {
+      lp: vi.fn((path: string) => `/d2l/api/lp/1.49${path}`),
+      le: vi.fn((path: string) => `/d2l/api/le/1.82${path}`),
+      getPagedResultSet: vi.fn(async (_path: string) => ({
+        data: [
+          { OrgUnit: { Id: 1, Name: 'Course 1', Code: 'C1' }, Access: { CanAccess: true } },
+          { OrgUnit: { Id: 2, Name: 'Course 2', Code: 'C2' }, Access: { CanAccess: true } }
+        ],
+        status: 200,
+        requestId: 'courses'
+      })),
+      get: vi.fn(async (path: string) => {
+        if (path === '/d2l/api/le/1.82/1/dropbox/folders/') {
           return {
             data: [
               {
-                type: 'grading',
-                assignment: {
-                  id: 10,
-                  course_id: 1,
-                  name: 'Todo',
-                  due_at: '2025-01-03T00:00:00Z',
-                  points_possible: 5,
-                  html_url: 'https://canvas.example.com/courses/1/assignments/10'
-                }
-              }
-            ],
-            status: 200,
-            requestId: 'todo'
-          };
-        }
-
-        if (path === '/api/v1/users/self/courses') {
-          return {
-            data: [
-              { id: 1, name: 'Course 1' },
-              { id: 2, name: 'Course 2' }
-            ],
-            status: 200,
-            requestId: 'courses'
-          };
-        }
-
-        if (path === '/api/v1/courses/1/assignments') {
-          return {
-            data: [
-              {
-                id: 20,
-                course_id: 1,
-                name: 'Assignment A',
-                due_at: '2025-01-02T00:00:00Z',
-                points_possible: 10,
-                html_url: 'https://canvas.example.com/courses/1/assignments/20'
+                Id: 20,
+                Name: 'Assignment A',
+                DueDate: '2025-01-02T00:00:00Z'
               }
             ],
             status: 200,
@@ -182,9 +139,9 @@ describe('list_upcoming', () => {
           };
         }
 
-        if (path === '/api/v1/courses/2/assignments') {
-          throw new AppError('CANVAS_UNAVAILABLE', 'Canvas down', 503, {
-            canvasStatus: 503
+        if (path === '/d2l/api/le/1.82/2/dropbox/folders/') {
+          throw new AppError('BRIGHTSPACE_UNAVAILABLE', 'Brightspace down', 503, {
+            brightspaceStatus: 503
           });
         }
 
@@ -192,45 +149,36 @@ describe('list_upcoming', () => {
       })
     };
 
-    const handler = await loadListUpcomingHandler(canvas);
+    const handler = await loadListUpcomingHandler(brightspace);
     const result = await handler({ days: 7 });
 
-    expect(result.structuredContent.upcoming.map((item) => item.id)).toEqual([20, 10]);
-    expect(canvas.getAll.mock.calls.some(([path]) => path === '/api/v1/courses/2/assignments'))
+    expect(result.structuredContent.upcoming.map((item) => item.id)).toEqual([20]);
+    expect(brightspace.get.mock.calls.some(([path]) => path === '/d2l/api/le/1.82/2/dropbox/folders/'))
       .toBe(true);
   });
 
   it('throws when all assignment fetches fail with non-auth errors', async () => {
-    const canvas = {
-      getAll: vi.fn(async (path: string) => {
-        if (path === '/api/v1/users/self/todo') {
-          return {
-            data: [],
-            status: 200,
-            requestId: 'todo'
-          };
-        }
-
-        if (path === '/api/v1/users/self/courses') {
-          return {
-            data: [
-              { id: 1, name: 'Course 1' },
-              { id: 2, name: 'Course 2' }
-            ],
-            status: 200,
-            requestId: 'courses'
-          };
-        }
-
-        if (path === '/api/v1/courses/1/assignments') {
-          throw new AppError('CANVAS_UNAVAILABLE', 'Canvas down', 503, {
-            canvasStatus: 503
+    const brightspace = {
+      lp: vi.fn((path: string) => `/d2l/api/lp/1.49${path}`),
+      le: vi.fn((path: string) => `/d2l/api/le/1.82${path}`),
+      getPagedResultSet: vi.fn(async (_path: string) => ({
+        data: [
+          { OrgUnit: { Id: 1, Name: 'Course 1', Code: 'C1' }, Access: { CanAccess: true } },
+          { OrgUnit: { Id: 2, Name: 'Course 2', Code: 'C2' }, Access: { CanAccess: true } }
+        ],
+        status: 200,
+        requestId: 'courses'
+      })),
+      get: vi.fn(async (path: string) => {
+        if (path === '/d2l/api/le/1.82/1/dropbox/folders/') {
+          throw new AppError('BRIGHTSPACE_UNAVAILABLE', 'Brightspace down', 503, {
+            brightspaceStatus: 503
           });
         }
 
-        if (path === '/api/v1/courses/2/assignments') {
-          throw new AppError('CANVAS_UNAVAILABLE', 'Canvas down', 503, {
-            canvasStatus: 503
+        if (path === '/d2l/api/le/1.82/2/dropbox/folders/') {
+          throw new AppError('BRIGHTSPACE_UNAVAILABLE', 'Brightspace down', 503, {
+            brightspaceStatus: 503
           });
         }
 
@@ -238,7 +186,7 @@ describe('list_upcoming', () => {
       })
     };
 
-    const handler = await loadListUpcomingHandler(canvas);
+    const handler = await loadListUpcomingHandler(brightspace);
 
     await expect(handler({ days: 7 })).rejects.toThrow(
       'Failed to fetch upcoming assignments for all courses.'

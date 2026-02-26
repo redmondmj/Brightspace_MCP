@@ -5,13 +5,17 @@ config();
 
 const envSchema = z
   .object({
-    CANVAS_BASE_URL: z.string().url(),
-    CANVAS_PAT: z.string().trim().optional(),
-    CANVAS_CLIENT_ID: z.string().trim().optional(),
-    CANVAS_CLIENT_SECRET: z.string().trim().optional(),
-    CANVAS_ACCESS_TOKEN: z.string().trim().optional(),
-    CANVAS_REFRESH_TOKEN: z.string().trim().optional(),
-    CANVAS_HTTP_TIMEOUT_MS: z
+    BRIGHTSPACE_BASE_URL: z.string().url(),
+    BRIGHTSPACE_AUTH_HOST: z
+      .string()
+      .url()
+      .optional()
+      .transform((value) => value?.trim() || 'https://auth.brightspace.com'),
+    BRIGHTSPACE_ACCESS_TOKEN: z.string().trim().optional(),
+    BRIGHTSPACE_CLIENT_ID: z.string().trim().optional(),
+    BRIGHTSPACE_CLIENT_SECRET: z.string().trim().optional(),
+    BRIGHTSPACE_REFRESH_TOKEN: z.string().trim().optional(),
+    BRIGHTSPACE_HTTP_TIMEOUT_MS: z
       .preprocess(
         (value) => {
           if (value === undefined || value === null || value === '') {
@@ -22,6 +26,14 @@ const envSchema = z
         z.coerce.number().int().min(1000).max(120000).optional()
       )
       .transform((value) => value ?? 15000),
+    BRIGHTSPACE_LP_VERSION: z
+      .string()
+      .optional()
+      .transform((value) => value?.trim() || '1.49'),
+    BRIGHTSPACE_LE_VERSION: z
+      .string()
+      .optional()
+      .transform((value) => value?.trim() || '1.82'),
     MCP_BEARER: z.string().trim().min(1, 'MCP_BEARER is required'),
     MCP_RATE_LIMIT_WINDOW_MS: numberFromEnv(60_000),
     MCP_RATE_LIMIT_MAX: numberFromEnv(30),
@@ -31,7 +43,7 @@ const envSchema = z
     MCP_SESSION_CLEANUP_INTERVAL_MS: numberFromEnv(60_000),
     MCP_MAX_SESSIONS: optionalPositiveInt(),
     MCP_SSE_HEARTBEAT_MS: numberFromEnv(25_000),
-    CANVAS_TIMEZONE: z
+    BRIGHTSPACE_TIMEZONE: z
       .string()
       .optional()
       .transform((value) => value?.trim() || 'UTC')
@@ -40,31 +52,34 @@ const envSchema = z
           .string()
           .trim()
           .refine((value) => isValidTimeZone(value), {
-            message: 'CANVAS_TIMEZONE must be a valid IANA time zone name.'
+            message: 'BRIGHTSPACE_TIMEZONE must be a valid IANA time zone name.'
           })
       )
   })
   .superRefine((value, ctx) => {
-    const hasPat = Boolean(value.CANVAS_PAT);
+    const hasAccessToken = Boolean(value.BRIGHTSPACE_ACCESS_TOKEN);
     const hasOAuth =
-      Boolean(value.CANVAS_CLIENT_ID) &&
-      Boolean(value.CANVAS_CLIENT_SECRET) &&
-      Boolean(value.CANVAS_REFRESH_TOKEN);
+      Boolean(value.BRIGHTSPACE_CLIENT_ID) &&
+      Boolean(value.BRIGHTSPACE_CLIENT_SECRET) &&
+      Boolean(value.BRIGHTSPACE_REFRESH_TOKEN);
 
-    if (!hasPat && !hasOAuth) {
+    if (!hasAccessToken && !hasOAuth) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
-          'Provide either CANVAS_PAT or full OAuth credentials (client id/secret and refresh token).',
-        path: ['CANVAS_PAT']
+          'Provide either BRIGHTSPACE_ACCESS_TOKEN or full OAuth credentials (client id/secret and refresh token).',
+        path: ['BRIGHTSPACE_ACCESS_TOKEN']
       });
     }
   });
 
 export type AppEnv = z.infer<typeof envSchema> & {
-  canvasBaseUrl: string;
-  canvasTimezone: string;
-  canvasHttpTimeoutMs: number;
+  brightspaceBaseUrl: string;
+  brightspaceAuthHost: string;
+  brightspaceTimezone: string;
+  brightspaceHttpTimeoutMs: number;
+  brightspaceLpVersion: string;
+  brightspaceLeVersion: string;
 };
 
 function numberFromEnv(defaultValue: number): z.ZodType<number, z.ZodTypeDef, unknown> {
@@ -120,13 +135,17 @@ export function loadEnv(): AppEnv {
     throw new Error(parsed.error.message);
   }
 
-  const canvasBaseUrl = normalizeBaseUrl(parsed.data.CANVAS_BASE_URL);
+  const brightspaceBaseUrl = normalizeBaseUrl(parsed.data.BRIGHTSPACE_BASE_URL);
+  const brightspaceAuthHost = normalizeBaseUrl(parsed.data.BRIGHTSPACE_AUTH_HOST);
 
   cachedEnv = {
     ...parsed.data,
-    canvasBaseUrl,
-    canvasTimezone: parsed.data.CANVAS_TIMEZONE,
-    canvasHttpTimeoutMs: parsed.data.CANVAS_HTTP_TIMEOUT_MS
+    brightspaceBaseUrl,
+    brightspaceAuthHost,
+    brightspaceTimezone: parsed.data.BRIGHTSPACE_TIMEZONE,
+    brightspaceHttpTimeoutMs: parsed.data.BRIGHTSPACE_HTTP_TIMEOUT_MS,
+    brightspaceLpVersion: parsed.data.BRIGHTSPACE_LP_VERSION,
+    brightspaceLeVersion: parsed.data.BRIGHTSPACE_LE_VERSION
   };
 
   return cachedEnv;

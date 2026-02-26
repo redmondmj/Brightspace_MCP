@@ -3,20 +3,20 @@ import { fetch } from 'undici';
 import { USER_AGENT } from '../core/meta.js';
 import { sleep } from '../core/async.js';
 
-export interface CanvasAuthStrategy {
+export interface BrightspaceAuthStrategy {
   getAuthorizationHeader(): Promise<string>;
   handleUnauthorized(): Promise<boolean>;
 }
 
 interface OAuthOptions {
-  baseUrl: string;
+  authHost: string;
   clientId: string;
   clientSecret: string;
   accessToken?: string;
   refreshToken: string;
 }
 
-class PersonalAccessTokenAuth implements CanvasAuthStrategy {
+class StaticAccessTokenAuth implements BrightspaceAuthStrategy {
   constructor(private readonly token: string) {}
 
   async getAuthorizationHeader(): Promise<string> {
@@ -28,9 +28,9 @@ class PersonalAccessTokenAuth implements CanvasAuthStrategy {
   }
 }
 
-class OAuthTokenAuth implements CanvasAuthStrategy {
+class OAuthTokenAuth implements BrightspaceAuthStrategy {
   private accessToken?: string;
-  private readonly baseUrl: string;
+  private readonly authHost: string;
   private readonly clientId: string;
   private readonly clientSecret: string;
   private refreshToken: string;
@@ -38,7 +38,7 @@ class OAuthTokenAuth implements CanvasAuthStrategy {
   private tokenExpiresAt: number | null = null;
 
   constructor(options: OAuthOptions) {
-    this.baseUrl = options.baseUrl;
+    this.authHost = options.authHost;
     this.clientId = options.clientId;
     this.clientSecret = options.clientSecret;
     this.refreshToken = options.refreshToken;
@@ -55,7 +55,7 @@ class OAuthTokenAuth implements CanvasAuthStrategy {
     }
 
     if (!this.accessToken) {
-      throw new Error('Missing Canvas access token after refresh.');
+      throw new Error('Missing Brightspace access token after refresh.');
     }
 
     return `Bearer ${this.accessToken}`;
@@ -91,16 +91,13 @@ class OAuthTokenAuth implements CanvasAuthStrategy {
   }
 
   private async performRefresh(force: boolean): Promise<void> {
-    const url = new URL('/login/oauth2/token', this.baseUrl);
+    const url = new URL('/core/connect/token', this.authHost);
     const body = new URLSearchParams({
       grant_type: 'refresh_token',
       refresh_token: this.refreshToken,
-      client_id: this.clientId
+      client_id: this.clientId,
+      client_secret: this.clientSecret
     });
-
-    if (this.clientSecret) {
-      body.set('client_secret', this.clientSecret);
-    }
 
     const response = await fetch(url, {
       method: 'POST',
@@ -113,10 +110,9 @@ class OAuthTokenAuth implements CanvasAuthStrategy {
 
     if (!response.ok) {
       if (!force) {
-        // Small delay before surfacing non-forced refresh errors to avoid hot loops.
         await sleep(300);
       }
-      throw new Error(`Canvas OAuth token refresh failed with status ${response.status}`);
+      throw new Error(`Brightspace OAuth token refresh failed with status ${response.status}`);
     }
 
     const payload = (await response.json()) as {
@@ -140,20 +136,19 @@ class OAuthTokenAuth implements CanvasAuthStrategy {
 }
 
 export function createAuthStrategy(options: {
-  baseUrl: string;
-  pat?: string;
+  accessToken?: string;
   clientId?: string;
   clientSecret?: string;
-  accessToken?: string;
   refreshToken?: string;
-}): CanvasAuthStrategy {
-  if (options.pat) {
-    return new PersonalAccessTokenAuth(options.pat);
+  authHost: string;
+}): BrightspaceAuthStrategy {
+  if (options.accessToken && !(options.clientId && options.clientSecret && options.refreshToken)) {
+    return new StaticAccessTokenAuth(options.accessToken);
   }
 
   if (options.clientId && options.clientSecret && options.refreshToken) {
     return new OAuthTokenAuth({
-      baseUrl: options.baseUrl,
+      authHost: options.authHost,
       clientId: options.clientId,
       clientSecret: options.clientSecret,
       accessToken: options.accessToken,
@@ -161,5 +156,5 @@ export function createAuthStrategy(options: {
     });
   }
 
-  throw new Error('No Canvas authentication method configured.');
+  throw new Error('No Brightspace authentication method configured.');
 }

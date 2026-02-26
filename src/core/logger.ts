@@ -29,7 +29,7 @@ export interface ToolLogContext {
   tool: string;
   status: 'success' | 'error';
   durationMs: number;
-  canvasStatus?: number;
+  brightspaceStatus?: number;
   requestId?: string;
   extraRequestIds?: string[];
   error?: unknown;
@@ -44,7 +44,7 @@ export function logToolEvent(msg: string, context: ToolLogContext): void {
     tool: context.tool,
     status: context.status,
     duration_ms: context.durationMs,
-    canvas_status: context.canvasStatus,
+    brightspace_status: context.brightspaceStatus,
     req_id: context.requestId,
     extra_req_ids: context.extraRequestIds,
     error: serializedError

@@ -2,25 +2,22 @@ import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 
-import { CanvasClient, type CanvasResult } from '../canvas/client.js';
+import { BrightspaceClient, type BrightspaceResult } from '../brightspace/client.js';
 import {
-  CanvasAnnouncement,
-  CanvasAssignment,
-  CanvasCourse,
-  CanvasFile,
-  CanvasFilePublicUrl,
-  CanvasFolder,
-  CanvasTodoItem
-} from '../canvas/types.js';
+  BrightspaceContentToc,
+  BrightspaceDropboxFolder,
+  BrightspaceFileSystemObject,
+  BrightspaceMyOrgUnitInfo,
+  BrightspaceNewsItem
+} from '../brightspace/types.js';
 import { AppError, unknownError } from '../core/errors.js';
 import { log, logToolEvent } from '../core/logger.js';
 import {
   getAssignmentOutputSchema,
   getFileDownloadUrlOutputSchema,
-  getFileOutputSchema,
-  getFolderOutputSchema,
   listAnnouncementsOutputSchema,
   listAssignmentsOutputSchema,
+  listCourseMaterialsOutputSchema,
   listCoursesOutputSchema,
   listFilesOutputSchema,
   listFoldersOutputSchema,
@@ -28,12 +25,13 @@ import {
   type Course
 } from './schemas.js';
 import {
+  fileIdFromPath,
   mapAnnouncement,
   mapAssignment,
   mapCourse,
+  mapCourseMaterials,
   mapFile,
-  mapFolder,
-  mapUpcomingFromAssignment
+  mapFolder
 } from './mappers.js';
 
 const DEFAULT_COURSE_LIMIT = 20;
@@ -49,7 +47,7 @@ const TERM_ORDER: Array<{ keyword: string; rank: number }> = [
 ];
 
 export interface ToolDependencies {
-  canvas: CanvasClient;
+  brightspace: BrightspaceClient;
 }
 
 interface ToolMeta {
@@ -88,7 +86,7 @@ function wrapTool<TArgs, TResult extends Record<string, unknown>>(
         tool: name,
         status: 'success',
         durationMs: Date.now() - start,
-        canvasStatus: meta.status,
+        brightspaceStatus: meta.status,
         requestId: meta.requestId,
         extraRequestIds: meta.requestIds
       });
@@ -105,7 +103,7 @@ function wrapTool<TArgs, TResult extends Record<string, unknown>>(
           tool: name,
           status: 'error',
           durationMs: duration,
-          canvasStatus: (error instanceof AppError && error.data?.canvasStatus) || undefined,
+          brightspaceStatus: (error instanceof AppError && error.data?.brightspaceStatus) || undefined,
           requestId: (error instanceof AppError && error.data?.requestId) || undefined,
           error
         });
@@ -223,46 +221,20 @@ function extractSeasonRank(value: string | null | undefined): number | null {
   return null;
 }
 
-export function registerCanvasTools(server: McpServer, deps: ToolDependencies): void {
+export function registerBrightspaceTools(server: McpServer, deps: ToolDependencies): void {
   registerListCourses(server, deps);
   registerListAssignments(server, deps);
   registerGetAssignment(server, deps);
   registerListAnnouncements(server, deps);
   registerListUpcoming(server, deps);
-  registerListUserFiles(server, deps);
+  registerListCourseMaterials(server, deps);
   registerListCourseFiles(server, deps);
-  registerListFolderFiles(server, deps);
-  registerGetFile(server, deps);
-  registerGetFileDownloadUrl(server, deps);
-  registerListUserFolders(server, deps);
   registerListCourseFolders(server, deps);
-  registerGetFolder(server, deps);
-}
-
-type FileToolCommonArgs = {
-  search_term?: string;
-  content_types?: string;
-  sort?: 'name' | 'size' | 'created_at' | 'updated_at' | 'content_type';
-  order?: 'asc' | 'desc';
-};
-
-function normalizeContentTypes(value: string | string[] | undefined): string[] | undefined {
-  if (!value) {
-    return undefined;
-  }
-
-  const values = Array.isArray(value) ? value : value.split(',');
-
-  const normalized = values
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0);
-
-  return normalized.length > 0 ? normalized : undefined;
+  registerGetFileDownloadUrl(server, deps);
 }
 
 function registerListCourses(server: McpServer, deps: ToolDependencies): void {
   const inputSchema = {
-    enrollment_state: z.enum(['active', 'completed']).optional(),
     include_past: z.boolean().optional(),
     limit: z.number().int().min(1).max(100).optional()
   };
@@ -271,36 +243,33 @@ function registerListCourses(server: McpServer, deps: ToolDependencies): void {
     'list_courses',
     {
       title: 'List Courses',
-      description: 'List Canvas courses for the authenticated user',
+      description: 'List Brightspace courses for the authenticated user',
       inputSchema,
       outputSchema: listCoursesOutputSchema.shape
     },
     wrapTool(
       'list_courses',
       async (args: {
-        enrollment_state?: 'active' | 'completed';
         include_past?: boolean;
         limit?: number;
       }) => {
-        const params: Record<string, unknown> = {
-          'include[]': ['term']
-        };
-
-        if (args.enrollment_state) {
-          params['enrollment_state[]'] = [args.enrollment_state];
+        const params: Record<string, unknown> = {};
+        if (!(args.include_past ?? false)) {
+          params.isActive = true;
         }
 
-        params['state[]'] = ['available'];
-
-        const { data, status, requestId, requestIds } = await deps.canvas.getAll<CanvasCourse>(
-          '/api/v1/users/self/courses',
-          params
-        );
+        const { data, status, requestId, requestIds } =
+          await deps.brightspace.getPagedResultSet<BrightspaceMyOrgUnitInfo>(
+            deps.brightspace.lp('/enrollments/myenrollments/'),
+            params
+          );
 
         const includePast = args.include_past ?? false;
         const limit = args.limit ?? DEFAULT_COURSE_LIMIT;
 
-        let courses = data.map(mapCourse);
+        let courses = data
+          .filter((entry) => entry.Access?.CanAccess !== false)
+          .map(mapCourse);
         courses = sortCoursesByRecency(courses);
 
         if (!includePast) {
@@ -336,7 +305,7 @@ function registerListAssignments(server: McpServer, deps: ToolDependencies): voi
     'list_assignments',
     {
       title: 'List Assignments',
-      description: 'List assignments within a Canvas course',
+      description: 'List assignments within a Brightspace course',
       inputSchema,
       outputSchema: listAssignmentsOutputSchema.shape
     },
@@ -348,34 +317,21 @@ function registerListAssignments(server: McpServer, deps: ToolDependencies): voi
         due_before?: string;
         search?: string;
       }) => {
-        const params: Record<string, unknown> = {
-          'include[]': ['submission']
-        };
-
-        if (args.due_after) {
-          params.due_after = args.due_after;
-        }
-        if (args.due_before) {
-          params.due_before = args.due_before;
-        }
-        if (args.search) {
-          params.search_term = args.search;
-        }
-
-        const { data, status, requestId, requestIds } = await deps.canvas.getAll<CanvasAssignment>(
-          `/api/v1/courses/${args.course_id}/assignments`,
-          params
+        const { data, status, requestId } = await deps.brightspace.get<unknown>(
+          deps.brightspace.le(`/${args.course_id}/dropbox/folders/`)
         );
 
-        const assignments = data.map((assignment) =>
-          mapAssignment({ ...assignment, course_id: assignment.course_id ?? args.course_id })
-        );
+        const folders = normalizeArray<BrightspaceDropboxFolder>(data);
+
+        const assignments = folders
+          .filter((folder) => matchesAssignmentFilters(folder, args))
+          .map((assignment) => mapAssignment(assignment, args.course_id));
 
         const payload = listAssignmentsOutputSchema.parse({ assignments });
 
         return {
           payload,
-          meta: { status, requestId, requestIds }
+          meta: { status, requestId }
         };
       }
     )
@@ -399,15 +355,12 @@ function registerGetAssignment(server: McpServer, deps: ToolDependencies): void 
     wrapTool(
       'get_assignment',
       async (args: { course_id: number; assignment_id: number }) => {
-        const { data, status, requestId } = await deps.canvas.get<CanvasAssignment>(
-          `/api/v1/courses/${args.course_id}/assignments/${args.assignment_id}`,
-          {
-            'include[]': ['submission']
-          }
+        const { data, status, requestId } = await deps.brightspace.get<BrightspaceDropboxFolder>(
+          deps.brightspace.le(`/${args.course_id}/dropbox/folders/${args.assignment_id}`)
         );
 
         const payload = getAssignmentOutputSchema.parse({
-          assignment: mapAssignment({ ...data, course_id: data.course_id ?? args.course_id })
+          assignment: mapAssignment(data, args.course_id)
         });
 
         return {
@@ -429,61 +382,59 @@ function registerListAnnouncements(server: McpServer, deps: ToolDependencies): v
     'list_announcements',
     {
       title: 'List Announcements',
-      description: 'List announcements across Canvas courses',
+      description: 'List announcements across Brightspace courses',
       inputSchema,
       outputSchema: listAnnouncementsOutputSchema.shape
     },
     wrapTool(
       'list_announcements',
       async (args: { course_id?: number; since?: string }) => {
-        let contextCodes: string[] | undefined;
         const requestIds: string[] = [];
         const statuses: number[] = [];
 
-        if (args.course_id) {
-          contextCodes = [`course_${args.course_id}`];
-        } else {
-          const coursesResult = await deps.canvas.getAll<CanvasCourse>(
-            '/api/v1/users/self/courses',
-            { 'enrollment_state[]': ['active'], 'include[]': ['term'] }
-          );
-          if (coursesResult.requestIds) {
-            requestIds.push(...coursesResult.requestIds);
-          } else if (coursesResult.requestId) {
-            requestIds.push(coursesResult.requestId);
+        const courseIds = await resolveCourseIds(deps, args.course_id, requestIds, statuses);
+        if (courseIds.length === 0) {
+          throw unknownError('No accessible Brightspace courses found for announcements.');
+        }
+
+        const limitFetch = createConcurrencyLimiter(UPCOMING_ASSIGNMENT_CONCURRENCY);
+        const announcementResults = await Promise.all(
+          courseIds.map((courseId) =>
+            limitFetch(async () => {
+              const params: Record<string, unknown> = {};
+              if (args.since) {
+                params.since = args.since;
+              }
+
+              const result = await deps.brightspace.get<unknown>(
+                deps.brightspace.le(`/${courseId}/news/`),
+                params
+              );
+
+              return { courseId, result };
+            })
+          )
+        );
+
+        const announcements: ReturnType<typeof mapAnnouncement>[] = [];
+
+        for (const entry of announcementResults) {
+          const { courseId, result } = entry;
+          statuses.push(result.status);
+          if (result.requestId) {
+            requestIds.push(result.requestId);
           }
-          statuses.push(coursesResult.status);
 
-          contextCodes = coursesResult.data.map((course) => `course_${course.id}`);
+          const items = normalizeArray<BrightspaceNewsItem>(result.data);
+          for (const item of items) {
+            if (item.IsPublished === false) {
+              continue;
+            }
+            announcements.push(mapAnnouncement(item, courseId));
+          }
         }
 
-        if (!contextCodes || contextCodes.length === 0) {
-          throw unknownError('No accessible Canvas courses found for announcements.');
-        }
-
-        const params: Record<string, unknown> = {
-          'context_codes[]': contextCodes,
-          active_only: true
-        };
-
-        if (args.since) {
-          params.start_date = args.since;
-        }
-
-        const { data, status, requestId, requestIds: announcementReqIds } =
-          await deps.canvas.getAll<CanvasAnnouncement>('/api/v1/announcements', params);
-
-        if (requestId) {
-          requestIds.push(requestId);
-        }
-        if (announcementReqIds) {
-          requestIds.push(...announcementReqIds);
-        }
-        statuses.push(status);
-
-        const payload = listAnnouncementsOutputSchema.parse({
-          announcements: data.map(mapAnnouncement)
-        });
+        const payload = listAnnouncementsOutputSchema.parse({ announcements });
 
         return {
           payload,
@@ -508,7 +459,7 @@ function registerListUpcoming(server: McpServer, deps: ToolDependencies): void {
     'list_upcoming',
     {
       title: 'List Upcoming Work',
-      description: 'Combine Canvas to-dos and upcoming assignments sorted by due date',
+      description: 'Combine Brightspace assignments sorted by due date',
       inputSchema,
       outputSchema: listUpcomingOutputSchema.shape
     },
@@ -517,40 +468,13 @@ function registerListUpcoming(server: McpServer, deps: ToolDependencies): void {
       const now = new Date();
       const rangeEnd = new Date(now.getTime() + rangeDays * 24 * 60 * 60 * 1000);
 
-      const upcomingMap = new Map<number, ReturnType<typeof mapUpcomingFromAssignment>>();
+      const upcomingMap = new Map<number, ReturnType<typeof mapAssignment>>();
       const metaRequestIds: string[] = [];
       const metaStatuses: number[] = [];
 
-      const todoResult = await deps.canvas.getAll<CanvasTodoItem>('/api/v1/users/self/todo');
-      if (todoResult.requestIds) {
-        metaRequestIds.push(...todoResult.requestIds);
-      } else if (todoResult.requestId) {
-        metaRequestIds.push(todoResult.requestId);
-      }
-      metaStatuses.push(todoResult.status);
-
-      for (const todo of todoResult.data) {
-        if (!todo.assignment) {
-          continue;
-        }
-
-        const assignment: CanvasAssignment = {
-          ...todo.assignment,
-          course_id: todo.assignment.course_id ?? todo.course_id ?? 0,
-          html_url: todo.assignment.html_url ?? todo.html_url ?? ''
-        };
-
-        if (!isWithinRange(assignment.due_at, now, rangeEnd)) {
-          continue;
-        }
-
-        const mapped = mapUpcomingFromAssignment(assignment, 'todo');
-        upcomingMap.set(mapped.id, mapped);
-      }
-
-      const coursesResult = await deps.canvas.getAll<CanvasCourse>(
-        '/api/v1/users/self/courses',
-        { 'enrollment_state[]': ['active'] }
+      const coursesResult = await deps.brightspace.getPagedResultSet<BrightspaceMyOrgUnitInfo>(
+        deps.brightspace.lp('/enrollments/myenrollments/'),
+        { isActive: true }
       );
       if (coursesResult.requestIds) {
         metaRequestIds.push(...coursesResult.requestIds);
@@ -559,48 +483,51 @@ function registerListUpcoming(server: McpServer, deps: ToolDependencies): void {
       }
       metaStatuses.push(coursesResult.status);
 
-      const maxCourses = args.max_courses ?? coursesResult.data.length;
-      const courses = coursesResult.data.slice(0, maxCourses);
+      const courseIds = coursesResult.data
+        .filter((entry) => entry.Access?.CanAccess !== false)
+        .map((entry) => entry.OrgUnit?.Id)
+        .filter((id): id is number => typeof id === 'number');
+
+      const maxCourses = args.max_courses ?? courseIds.length;
+      const limitedCourses = courseIds.slice(0, maxCourses);
+
       const limitAssignments = createConcurrencyLimiter(UPCOMING_ASSIGNMENT_CONCURRENCY);
 
       type AssignmentSuccess = {
-        course: CanvasCourse;
-        assignmentsResult: CanvasResult<CanvasAssignment[]>;
+        courseId: number;
+        assignmentsResult: BrightspaceResult<BrightspaceDropboxFolder[]>;
       };
-      type AssignmentFailure = { course: CanvasCourse; error: unknown; isAuthFailure: boolean };
+      type AssignmentFailure = { courseId: number; error: unknown; isAuthFailure: boolean };
       type AssignmentFetchResult = AssignmentSuccess | AssignmentFailure;
 
       const assignmentResults: AssignmentFetchResult[] = await Promise.all(
-        courses.map((course) =>
+        limitedCourses.map((courseId) =>
           limitAssignments(async () => {
             try {
-              const assignmentsResult = await deps.canvas.getAll<CanvasAssignment>(
-                `/api/v1/courses/${course.id}/assignments`,
-                {
-                  'include[]': ['submission'],
-                  bucket: 'upcoming'
-                }
+              const { data, status, requestId } = await deps.brightspace.get<unknown>(
+                deps.brightspace.le(`/${courseId}/dropbox/folders/`)
               );
-
-              return { course, assignmentsResult };
+              const normalized = normalizeArray<BrightspaceDropboxFolder>(data);
+              return {
+                courseId,
+                assignmentsResult: { data: normalized, status, requestId }
+              };
             } catch (error) {
               const isAuthFailure =
                 error instanceof AppError && error.code === 'AUTHORIZATION_FAILED';
               if (isAuthFailure) {
-                log(
-                  'warn',
-                  'Skipping course for upcoming assignments due to authorization error',
-                  { course_id: course.id }
-                );
-                return { course, error, isAuthFailure };
+                log('warn', 'Skipping course for upcoming assignments due to authorization error', {
+                  course_id: courseId
+                });
+                return { courseId, error, isAuthFailure };
               }
 
               log('warn', 'Skipping course for upcoming assignments due to error', {
-                course_id: course.id,
+                course_id: courseId,
                 error: error instanceof Error ? error.message : String(error),
                 code: error instanceof AppError ? error.code : undefined
               });
-              return { course, error, isAuthFailure: false };
+              return { courseId, error, isAuthFailure: false };
             }
           })
         )
@@ -620,26 +547,21 @@ function registerListUpcoming(server: McpServer, deps: ToolDependencies): void {
           continue;
         }
 
-        const { course, assignmentsResult } = result;
+        const { courseId, assignmentsResult } = result;
         assignmentSuccessCount += 1;
 
-        if (assignmentsResult.requestIds) {
-          metaRequestIds.push(...assignmentsResult.requestIds);
-        } else if (assignmentsResult.requestId) {
+        if (assignmentsResult.requestId) {
           metaRequestIds.push(assignmentsResult.requestId);
         }
         metaStatuses.push(assignmentsResult.status);
 
         for (const assignment of assignmentsResult.data) {
-          const dueAt = assignment.due_at ?? null;
+          const dueAt = assignment.DueDate ?? null;
           if (dueAt && !isWithinRange(dueAt, now, rangeEnd)) {
             continue;
           }
 
-          const mapped = mapUpcomingFromAssignment(
-            { ...assignment, course_id: assignment.course_id ?? course.id },
-            'assignment'
-          );
+          const mapped = mapAssignment(assignment, courseId, 'assignment');
 
           if (!upcomingMap.has(mapped.id)) {
             upcomingMap.set(mapped.id, mapped);
@@ -647,15 +569,15 @@ function registerListUpcoming(server: McpServer, deps: ToolDependencies): void {
         }
       }
 
-      if (courses.length > 0 && assignmentSuccessCount === 0) {
+      if (limitedCourses.length > 0 && assignmentSuccessCount === 0) {
         const details = {
-          courseCount: courses.length,
+          courseCount: limitedCourses.length,
           authFailures: assignmentAuthFailureCount,
           nonAuthFailures: assignmentNonAuthFailureCount
         };
         if (assignmentNonAuthFailureCount > 0) {
           throw new AppError(
-            'CANVAS_UNAVAILABLE',
+            'BRIGHTSPACE_UNAVAILABLE',
             'Failed to fetch upcoming assignments for all courses.',
             503,
             { details }
@@ -689,6 +611,158 @@ function registerListUpcoming(server: McpServer, deps: ToolDependencies): void {
   );
 }
 
+function registerListCourseMaterials(server: McpServer, deps: ToolDependencies): void {
+  const inputSchema = {
+    course_id: z.number().int().nonnegative()
+  } satisfies Record<string, z.ZodTypeAny>;
+
+  server.registerTool(
+    'list_course_materials',
+    {
+      title: 'List Course Materials',
+      description: 'List Brightspace course modules and topics from the content table of contents',
+      inputSchema,
+      outputSchema: listCourseMaterialsOutputSchema.shape
+    },
+    wrapTool('list_course_materials', async (args: { course_id: number }) => {
+      const { data, status, requestId } = await deps.brightspace.get<BrightspaceContentToc>(
+        deps.brightspace.le(`/${args.course_id}/content/toc`)
+      );
+
+      const modules = mapCourseMaterials(data?.Modules ?? []);
+      const payload = listCourseMaterialsOutputSchema.parse({ modules });
+
+      return {
+        payload,
+        meta: { status, requestId }
+      };
+    })
+  );
+}
+
+function registerListCourseFiles(server: McpServer, deps: ToolDependencies): void {
+  const inputSchema = {
+    course_id: z.number().int().nonnegative(),
+    path: z.string().optional()
+  } satisfies Record<string, z.ZodTypeAny>;
+
+  server.registerTool(
+    'list_course_files',
+    {
+      title: 'List Course Files',
+      description: 'List files within a Brightspace course',
+      inputSchema,
+      outputSchema: listFilesOutputSchema.shape
+    },
+    wrapTool('list_course_files', async (args: { course_id: number; path?: string }) => {
+      const params: Record<string, unknown> = {};
+      if (args.path) {
+        params.path = args.path;
+      }
+
+      const { data, status, requestId, requestIds } =
+        await deps.brightspace.getObjectListPage<BrightspaceFileSystemObject>(
+          deps.brightspace.lp(`/${args.course_id}/managefiles/`),
+          params
+        );
+
+      const basePath = normalizeBasePath(args.path);
+      const files = data
+        .filter((entry) => entry.FileSystemObjectType === 2)
+        .map((entry) => mapFile({
+          Name: entry.Name,
+          path: joinPath(basePath, entry.Name)
+        }));
+
+      const payload = listFilesOutputSchema.parse({ files });
+
+      return {
+        payload,
+        meta: { status, requestId, requestIds }
+      };
+    })
+  );
+}
+
+function registerListCourseFolders(server: McpServer, deps: ToolDependencies): void {
+  const inputSchema = {
+    course_id: z.number().int().nonnegative(),
+    path: z.string().optional()
+  } satisfies Record<string, z.ZodTypeAny>;
+
+  server.registerTool(
+    'list_course_folders',
+    {
+      title: 'List Course Folders',
+      description: 'List all folders within a Brightspace course',
+      inputSchema,
+      outputSchema: listFoldersOutputSchema.shape
+    },
+    wrapTool('list_course_folders', async (args: { course_id: number; path?: string }) => {
+      const params: Record<string, unknown> = {};
+      if (args.path) {
+        params.path = args.path;
+      }
+
+      const { data, status, requestId, requestIds } =
+        await deps.brightspace.getObjectListPage<BrightspaceFileSystemObject>(
+          deps.brightspace.lp(`/${args.course_id}/managefiles/`),
+          params
+        );
+
+      const basePath = normalizeBasePath(args.path);
+      const folders = data
+        .filter((entry) => entry.FileSystemObjectType === 1)
+        .map((entry) => mapFolder({
+          Name: entry.Name,
+          path: joinPath(basePath, entry.Name)
+        }));
+
+      const payload = listFoldersOutputSchema.parse({ folders });
+
+      return {
+        payload,
+        meta: { status, requestId, requestIds }
+      };
+    })
+  );
+}
+
+function registerGetFileDownloadUrl(server: McpServer, deps: ToolDependencies): void {
+  const inputSchema = {
+    course_id: z.number().int().nonnegative(),
+    path: z.string().min(1)
+  } satisfies Record<string, z.ZodTypeAny>;
+
+  server.registerTool(
+    'get_file_download_url',
+    {
+      title: 'Get File Download URL',
+      description:
+        'Get a download URL for a file path in Brightspace. The URL requires the same access token used for API calls.',
+      inputSchema,
+      outputSchema: getFileDownloadUrlOutputSchema.shape
+    },
+    wrapTool('get_file_download_url', async (args: { course_id: number; path: string }) => {
+      const url = deps.brightspace.resolveUrl(
+        deps.brightspace.lp(`/${args.course_id}/managefiles/file`),
+        { path: args.path }
+      );
+
+      const payload = getFileDownloadUrlOutputSchema.parse({
+        file_id: fileIdFromPath(args.path),
+        download_url: url.toString(),
+        path: args.path
+      });
+
+      return {
+        payload,
+        meta: { status: 200, requestId: undefined }
+      };
+    })
+  );
+}
+
 function isWithinRange(
   isoDate: string | null | undefined,
   start: Date,
@@ -706,349 +780,107 @@ function isWithinRange(
   return timestamp >= start.getTime() && timestamp <= end.getTime();
 }
 
-function registerListUserFiles(server: McpServer, deps: ToolDependencies): void {
-  const inputSchema = {
-    search_term: z.string().optional(),
-    content_types: z
-      .preprocess((value) => {
-        if (Array.isArray(value)) {
-          return value.join(',');
-        }
-        return value ?? undefined;
-      }, z.string().optional()),
-    sort: z.enum(['name', 'size', 'created_at', 'updated_at', 'content_type']).optional(),
-    order: z.enum(['asc', 'desc']).optional()
-  } satisfies Record<string, z.ZodTypeAny>;
+function normalizeArray<T>(data: unknown): T[] {
+  if (Array.isArray(data)) {
+    return data as T[];
+  }
 
-  server.registerTool(
-    'list_user_files',
-    {
-      title: 'List User Files',
-      description: 'List files in the authenticated user\'s personal files',
-      inputSchema,
-      outputSchema: listFilesOutputSchema.shape
-    },
-    wrapTool(
-      'list_user_files',
-      async (args: FileToolCommonArgs) => {
-        const params: Record<string, unknown> = {};
+  if (data && typeof data === 'object') {
+    const anyData = data as Record<string, unknown>;
+    if (Array.isArray(anyData.Items)) {
+      return anyData.Items as T[];
+    }
+    if (Array.isArray(anyData.Objects)) {
+      return anyData.Objects as T[];
+    }
+  }
 
-        if (args.search_term) {
-          params.search_term = args.search_term;
-        }
-        const contentTypes = normalizeContentTypes(args.content_types);
-        if (contentTypes && contentTypes.length > 0) {
-          params['content_types[]'] = contentTypes;
-        }
-        if (args.sort) {
-          params.sort = args.sort;
-        }
-        if (args.order) {
-          params.order = args.order;
-        }
-
-        const { data, status, requestId, requestIds } = await deps.canvas.getAll<CanvasFile>(
-          '/api/v1/users/self/files',
-          params
-        );
-
-        const files = data.map(mapFile);
-        const payload = listFilesOutputSchema.parse({ files });
-
-        return {
-          payload,
-          meta: { status, requestId, requestIds }
-        };
-      }
-    )
-  );
+  throw unknownError('Expected an array response from Brightspace.', data);
 }
 
-function registerListCourseFiles(server: McpServer, deps: ToolDependencies): void {
-  const inputSchema = {
-    course_id: z.number().int().nonnegative(),
-    search_term: z.string().optional(),
-    content_types: z
-      .preprocess((value) => {
-        if (Array.isArray(value)) {
-          return value.join(',');
-        }
-        return value ?? undefined;
-      }, z.string().optional()),
-    sort: z.enum(['name', 'size', 'created_at', 'updated_at', 'content_type']).optional(),
-    order: z.enum(['asc', 'desc']).optional()
-  } satisfies Record<string, z.ZodTypeAny>;
+function normalizeBasePath(path?: string): string {
+  if (!path) {
+    return '';
+  }
 
-  server.registerTool(
-    'list_course_files',
-    {
-      title: 'List Course Files',
-      description: 'List files within a Canvas course',
-      inputSchema,
-      outputSchema: listFilesOutputSchema.shape
-    },
-    wrapTool(
-      'list_course_files',
-      async (args: {
-        course_id: number;
-        search_term?: string;
-        content_types?: string;
-        sort?: 'name' | 'size' | 'created_at' | 'updated_at' | 'content_type';
-        order?: 'asc' | 'desc';
-      }) => {
-        const params: Record<string, unknown> = {};
+  let normalized = path.trim();
+  if (!normalized) {
+    return '';
+  }
 
-        if (args.search_term) {
-          params.search_term = args.search_term;
-        }
-        const contentTypes = normalizeContentTypes(args.content_types);
-        if (contentTypes && contentTypes.length > 0) {
-          params['content_types[]'] = contentTypes;
-        }
-        if (args.sort) {
-          params.sort = args.sort;
-        }
-        if (args.order) {
-          params.order = args.order;
-        }
+  if (!normalized.startsWith('/')) {
+    normalized = `/${normalized}`;
+  }
 
-        const { data, status, requestId, requestIds } = await deps.canvas.getAll<CanvasFile>(
-          `/api/v1/courses/${args.course_id}/files`,
-          params
-        );
+  if (normalized.endsWith('/') && normalized.length > 1) {
+    normalized = normalized.slice(0, -1);
+  }
 
-        const files = data.map(mapFile);
-        const payload = listFilesOutputSchema.parse({ files });
-
-        return {
-          payload,
-          meta: { status, requestId, requestIds }
-        };
-      }
-    )
-  );
+  return normalized;
 }
 
-function registerListFolderFiles(server: McpServer, deps: ToolDependencies): void {
-  const inputSchema = {
-    folder_id: z.number().int().nonnegative(),
-    search_term: z.string().optional(),
-    content_types: z
-      .preprocess((value) => {
-        if (Array.isArray(value)) {
-          return value.join(',');
-        }
-        return value ?? undefined;
-      }, z.string().optional()),
-    sort: z.enum(['name', 'size', 'created_at', 'updated_at', 'content_type']).optional(),
-    order: z.enum(['asc', 'desc']).optional()
-  } satisfies Record<string, z.ZodTypeAny>;
+function joinPath(basePath: string, name: string): string {
+  if (!basePath) {
+    return name.startsWith('/') ? name : `/${name}`;
+  }
 
-  server.registerTool(
-    'list_folder_files',
-    {
-      title: 'List Folder Files',
-      description: 'List files within a specific folder',
-      inputSchema,
-      outputSchema: listFilesOutputSchema.shape
-    },
-    wrapTool(
-      'list_folder_files',
-      async (args: {
-        folder_id: number;
-        search_term?: string;
-        content_types?: string;
-        sort?: 'name' | 'size' | 'created_at' | 'updated_at' | 'content_type';
-        order?: 'asc' | 'desc';
-      }) => {
-        const params: Record<string, unknown> = {};
-
-        if (args.search_term) {
-          params.search_term = args.search_term;
-        }
-        const contentTypes = normalizeContentTypes(args.content_types);
-        if (contentTypes && contentTypes.length > 0) {
-          params['content_types[]'] = contentTypes;
-        }
-        if (args.sort) {
-          params.sort = args.sort;
-        }
-        if (args.order) {
-          params.order = args.order;
-        }
-
-        const { data, status, requestId, requestIds } = await deps.canvas.getAll<CanvasFile>(
-          `/api/v1/folders/${args.folder_id}/files`,
-          params
-        );
-
-        const files = data.map(mapFile);
-        const payload = listFilesOutputSchema.parse({ files });
-
-        return {
-          payload,
-          meta: { status, requestId, requestIds }
-        };
-      }
-    )
-  );
+  return `${basePath}/${name}`;
 }
 
-function registerGetFile(server: McpServer, deps: ToolDependencies): void {
-  const inputSchema = {
-    file_id: z.number().int().nonnegative()
-  } satisfies Record<string, z.ZodTypeAny>;
+async function resolveCourseIds(
+  deps: ToolDependencies,
+  courseId: number | undefined,
+  requestIds: string[],
+  statuses: number[]
+): Promise<number[]> {
+  if (courseId) {
+    return [courseId];
+  }
 
-  server.registerTool(
-    'get_file',
-    {
-      title: 'Get File',
-      description: 'Get detailed information about a specific file',
-      inputSchema,
-      outputSchema: getFileOutputSchema.shape
-    },
-    wrapTool('get_file', async (args: { file_id: number }) => {
-      const { data, status, requestId } = await deps.canvas.get<CanvasFile>(
-        `/api/v1/files/${args.file_id}`
-      );
-
-      const payload = getFileOutputSchema.parse({
-        file: mapFile(data)
-      });
-
-      return {
-        payload,
-        meta: { status, requestId }
-      };
-    })
+  const coursesResult = await deps.brightspace.getPagedResultSet<BrightspaceMyOrgUnitInfo>(
+    deps.brightspace.lp('/enrollments/myenrollments/'),
+    { isActive: true }
   );
+  if (coursesResult.requestIds) {
+    requestIds.push(...coursesResult.requestIds);
+  } else if (coursesResult.requestId) {
+    requestIds.push(coursesResult.requestId);
+  }
+  statuses.push(coursesResult.status);
+
+  return coursesResult.data
+    .filter((entry) => entry.Access?.CanAccess !== false)
+    .map((entry) => entry.OrgUnit?.Id)
+    .filter((id): id is number => typeof id === 'number');
 }
 
-function registerGetFileDownloadUrl(server: McpServer, deps: ToolDependencies): void {
-  const inputSchema = {
-    file_id: z.number().int().nonnegative(),
-    submission_id: z.number().int().nonnegative().optional()
-  } satisfies Record<string, z.ZodTypeAny>;
+function matchesAssignmentFilters(
+  assignment: BrightspaceDropboxFolder,
+  filters: { due_after?: string; due_before?: string; search?: string }
+): boolean {
+  if (filters.search) {
+    const term = filters.search.toLowerCase();
+    if (!assignment.Name.toLowerCase().includes(term)) {
+      return false;
+    }
+  }
 
-  server.registerTool(
-    'get_file_download_url',
-    {
-      title: 'Get File Download URL',
-      description:
-        'Get a temporary download URL for a file. The URL is signed and expires after a short time.',
-      inputSchema,
-      outputSchema: getFileDownloadUrlOutputSchema.shape
-    },
-    wrapTool(
-      'get_file_download_url',
-      async (args: { file_id: number; submission_id?: number }) => {
-        const params: Record<string, unknown> = {};
+  const dueAt = assignment.DueDate ?? null;
+  if (filters.due_after) {
+    const after = Date.parse(filters.due_after);
+    const due = dueAt ? Date.parse(dueAt) : NaN;
+    if (Number.isFinite(after) && Number.isFinite(due) && due < after) {
+      return false;
+    }
+  }
 
-        if (args.submission_id) {
-          params.submission_id = args.submission_id;
-        }
+  if (filters.due_before) {
+    const before = Date.parse(filters.due_before);
+    const due = dueAt ? Date.parse(dueAt) : NaN;
+    if (Number.isFinite(before) && Number.isFinite(due) && due > before) {
+      return false;
+    }
+  }
 
-        const { data, status, requestId } = await deps.canvas.get<CanvasFilePublicUrl>(
-          `/api/v1/files/${args.file_id}/public_url`,
-          params
-        );
-
-        const payload = getFileDownloadUrlOutputSchema.parse({
-          file_id: args.file_id,
-          download_url: data.public_url
-        });
-
-        return {
-          payload,
-          meta: { status, requestId }
-        };
-      }
-    )
-  );
-}
-
-function registerListUserFolders(server: McpServer, deps: ToolDependencies): void {
-  const inputSchema = {} satisfies Record<string, z.ZodTypeAny>;
-
-  server.registerTool(
-    'list_user_folders',
-    {
-      title: 'List User Folders',
-      description: 'List all folders in the authenticated user\'s personal files',
-      inputSchema,
-      outputSchema: listFoldersOutputSchema.shape
-    },
-    wrapTool('list_user_folders', async () => {
-      const { data, status, requestId, requestIds } = await deps.canvas.getAll<CanvasFolder>(
-        '/api/v1/users/self/folders'
-      );
-
-      const folders = data.map(mapFolder);
-      const payload = listFoldersOutputSchema.parse({ folders });
-
-      return {
-        payload,
-        meta: { status, requestId, requestIds }
-      };
-    })
-  );
-}
-
-function registerListCourseFolders(server: McpServer, deps: ToolDependencies): void {
-  const inputSchema = {
-    course_id: z.number().int().nonnegative()
-  } satisfies Record<string, z.ZodTypeAny>;
-
-  server.registerTool(
-    'list_course_folders',
-    {
-      title: 'List Course Folders',
-      description: 'List all folders within a Canvas course',
-      inputSchema,
-      outputSchema: listFoldersOutputSchema.shape
-    },
-    wrapTool('list_course_folders', async (args: { course_id: number }) => {
-      const { data, status, requestId, requestIds } = await deps.canvas.getAll<CanvasFolder>(
-        `/api/v1/courses/${args.course_id}/folders`
-      );
-
-      const folders = data.map(mapFolder);
-      const payload = listFoldersOutputSchema.parse({ folders });
-
-      return {
-        payload,
-        meta: { status, requestId, requestIds }
-      };
-    })
-  );
-}
-
-function registerGetFolder(server: McpServer, deps: ToolDependencies): void {
-  const inputSchema = {
-    folder_id: z.number().int().nonnegative()
-  } satisfies Record<string, z.ZodTypeAny>;
-
-  server.registerTool(
-    'get_folder',
-    {
-      title: 'Get Folder',
-      description: 'Get detailed information about a specific folder',
-      inputSchema,
-      outputSchema: getFolderOutputSchema.shape
-    },
-    wrapTool('get_folder', async (args: { folder_id: number }) => {
-      const { data, status, requestId } = await deps.canvas.get<CanvasFolder>(
-        `/api/v1/folders/${args.folder_id}`
-      );
-
-      const payload = getFolderOutputSchema.parse({
-        folder: mapFolder(data)
-      });
-
-      return {
-        payload,
-        meta: { status, requestId }
-      };
-    })
-  );
+  return true;
 }

@@ -2,13 +2,13 @@ export type ErrorCode =
   | 'AUTHORIZATION_FAILED'
   | 'NOT_FOUND'
   | 'RATE_LIMITED'
-  | 'CANVAS_UNAVAILABLE'
+  | 'BRIGHTSPACE_UNAVAILABLE'
   | 'BAD_REQUEST'
   | 'UNKNOWN';
 
 export interface ErrorData {
   requestId?: string;
-  canvasStatus?: number;
+  brightspaceStatus?: number;
   details?: unknown;
 }
 
@@ -33,36 +33,36 @@ const STATUS_TO_CODE: Record<number, ErrorCode> = {
 };
 
 const STATUS_TO_MESSAGE: Record<number, string> = {
-  400: 'Invalid request sent to Canvas.',
-  401: 'Authorization failed: check Canvas token/scopes.',
-  403: 'Authorization failed: check Canvas token/scopes.',
-  404: 'Not found: course or assignment id.',
-  429: 'Rate limited by Canvas; retry later.'
+  400: 'Invalid request sent to Brightspace.',
+  401: 'Authorization failed: check Brightspace token/scopes.',
+  403: 'Authorization failed: check Brightspace token/scopes.',
+  404: 'Not found: course or item id.',
+  429: 'Rate limited by Brightspace; retry later.'
 };
 
-export function canvasError(
+export function brightspaceError(
   status: number,
   requestId: string | undefined,
   fallbackMessage?: string,
   details?: unknown
 ): AppError {
-  const code = STATUS_TO_CODE[status] ?? 'CANVAS_UNAVAILABLE';
+  const code = STATUS_TO_CODE[status] ?? 'BRIGHTSPACE_UNAVAILABLE';
   let httpStatus = status;
 
   if (status >= 500) {
     httpStatus = 503;
   }
 
-  if (code === 'CANVAS_UNAVAILABLE') {
+  if (code === 'BRIGHTSPACE_UNAVAILABLE') {
     httpStatus = 503;
   }
 
   const message =
-    STATUS_TO_MESSAGE[status] ?? 'Canvas temporarily unavailable.';
+    STATUS_TO_MESSAGE[status] ?? 'Brightspace temporarily unavailable.';
 
   return new AppError(code, fallbackMessage ?? message, httpStatus, {
     requestId,
-    canvasStatus: status,
+    brightspaceStatus: status,
     details
   });
 }
@@ -74,14 +74,14 @@ export function unknownError(
   return new AppError('UNKNOWN', message, 500, { details });
 }
 
-export function canvasTimeoutError(
+export function brightspaceTimeoutError(
   timeoutMs: number,
   url: string,
   details?: Record<string, unknown>
 ): AppError {
   return new AppError(
-    'CANVAS_UNAVAILABLE',
-    `Canvas request timed out after ${timeoutMs}ms.`,
+    'BRIGHTSPACE_UNAVAILABLE',
+    `Brightspace request timed out after ${timeoutMs}ms.`,
     503,
     {
       details: {

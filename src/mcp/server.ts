@@ -3,14 +3,14 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 
-import { CanvasClient } from '../canvas/client.js';
+import { BrightspaceClient } from '../brightspace/client.js';
 import { log } from '../core/logger.js';
-import { registerCanvasTools } from '../tools/index.js';
+import { registerBrightspaceTools } from '../tools/index.js';
 import { APP_NAME, APP_VERSION } from '../core/meta.js';
-import { registerCanvasPrompts } from './prompts.js';
+import { registerBrightspacePrompts } from './prompts.js';
 
 export interface HttpServerConfig {
-  canvasClient: CanvasClient;
+  brightspaceClient: BrightspaceClient;
   bearerToken: string;
   port: number;
   enableStdio?: boolean;
@@ -77,7 +77,7 @@ export async function startServer(config: HttpServerConfig): Promise<void> {
 
     try {
       const transport = new SSEServerTransport('/messages', res);
-      const server = createMcpServer(config.canvasClient);
+      const server = createMcpServer(config.brightspaceClient);
       const now = Date.now();
       const session: SessionTransport = {
         transport,
@@ -167,18 +167,18 @@ export async function startServer(config: HttpServerConfig): Promise<void> {
   process.on('SIGTERM', shutdown);
 
   if (config.enableStdio) {
-    await startStdio(config.canvasClient);
+    await startStdio(config.brightspaceClient);
   }
 }
 
-function createMcpServer(canvasClient: CanvasClient): McpServer {
+function createMcpServer(brightspaceClient: BrightspaceClient): McpServer {
   const server = new McpServer({
     name: APP_NAME,
     version: APP_VERSION
   });
 
-  registerCanvasTools(server, { canvas: canvasClient });
-  registerCanvasPrompts(server);
+  registerBrightspaceTools(server, { brightspace: brightspaceClient });
+  registerBrightspacePrompts(server);
 
   const previousOnInitialized = server.server.oninitialized;
   server.server.oninitialized = () => {
@@ -189,8 +189,8 @@ function createMcpServer(canvasClient: CanvasClient): McpServer {
   return server;
 }
 
-async function startStdio(canvasClient: CanvasClient): Promise<void> {
-  const server = createMcpServer(canvasClient);
+async function startStdio(brightspaceClient: BrightspaceClient): Promise<void> {
+  const server = createMcpServer(brightspaceClient);
   const transport = new StdioServerTransport();
   await server.connect(transport);
   log('info', 'STDIO transport ready', {});

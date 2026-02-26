@@ -2,12 +2,12 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { GetPromptResult, PromptMessage } from '@modelcontextprotocol/sdk/types.js';
 
-export function registerCanvasPrompts(server: McpServer): void {
+export function registerBrightspacePrompts(server: McpServer): void {
   server.registerPrompt(
-    'canvas.quickstart',
+    'brightspace.quickstart',
     {
-      title: 'Canvas Quickstart',
-      description: 'Kick-off instructions for using Canvas MCP tools effectively.'
+      title: 'Brightspace Quickstart',
+      description: 'Kick-off instructions for using Brightspace MCP tools effectively.'
     },
     () => buildQuickstartPrompt()
   );
@@ -28,10 +28,11 @@ export function registerCanvasPrompts(server: McpServer): void {
   } satisfies Record<string, z.ZodTypeAny>;
 
   server.registerPrompt(
-    'canvas.assignment_brief',
+    'brightspace.assignment_brief',
     {
       title: 'Assignment Brief',
-      description: 'Guide the model through gathering course assignments and upcoming deliverables.',
+      description:
+        'Guide the model through gathering course assignments and upcoming deliverables.',
       argsSchema: assignmentArgs
     },
     (args) => buildAssignmentBriefPrompt(args)
@@ -52,10 +53,10 @@ export function registerCanvasPrompts(server: McpServer): void {
   } satisfies Record<string, z.ZodTypeAny>;
 
   server.registerPrompt(
-    'canvas.announcement_digest',
+    'brightspace.announcement_digest',
     {
       title: 'Announcement Digest',
-      description: 'Produce a summary of recent Canvas announcements.',
+      description: 'Produce a summary of recent Brightspace announcements.',
       argsSchema: announcementArgs
     },
     (args) => buildAnnouncementDigestPrompt(args)
@@ -77,10 +78,10 @@ export function registerCanvasPrompts(server: McpServer): void {
   } satisfies Record<string, z.ZodTypeAny>;
 
   server.registerPrompt(
-    'canvas.file_access',
+    'brightspace.file_access',
     {
       title: 'File Access Guide',
-      description: 'Help the learner locate and access Canvas course files and documents.',
+      description: 'Help the learner locate and access Brightspace course files and documents.',
       argsSchema: fileAccessArgs
     },
     (args) => buildFileAccessPrompt(args)
@@ -89,33 +90,33 @@ export function registerCanvasPrompts(server: McpServer): void {
 
 function buildQuickstartPrompt(): GetPromptResult {
   const text = joinLines([
-    'You are the Canvas study planner connected to the Canvas MCP server. Always rely on the provided tools to retrieve data instead of guessing.',
+    'You are the Brightspace study planner connected to the Brightspace MCP server. Always rely on the provided tools to retrieve data instead of guessing.',
     '',
     'Available tools:',
-    '- `list_courses`: discover Canvas course IDs, names, codes, and terms.',
+    '- `list_courses`: discover Brightspace course IDs, names, codes, and terms.',
     '- `list_assignments`: inspect assignments inside a course, filtering by due dates or keywords as needed.',
     '- `get_assignment`: drill into a single assignment for submission status or full details before advising.',
-    '- `list_upcoming`: gather the near-term to-do list that Canvas surfaces across courses.',
+    '- `list_upcoming`: gather the near-term Brightspace assignment workload across courses.',
     '- `list_announcements`: review announcements, optionally scoped to a single course or recent timeframe.',
-    '- `list_user_files`, `list_course_files`, `list_folder_files`: browse files in personal space, courses, or specific folders.',
-    '- `get_file`: retrieve detailed metadata for a specific file (name, size, type, lock status).',
-    '- `get_file_download_url`: obtain a temporary signed URL to download file content.',
-    '- `list_user_folders`, `list_course_folders`, `get_folder`: navigate folder structures and see file organization.',
+    '- `list_course_materials`: browse modules and topics in the course content table of contents.',
+    '- `list_course_files`: browse files for a course (optionally scoped to a folder path).',
+    '- `list_course_folders`: browse folders for a course (optionally scoped to a folder path).',
+    '- `get_file_download_url`: obtain a download URL for a course file path.',
     '',
     'Workflow:',
     '1. Clarify the learner\'s goal (course, timeframe, task type, file access) and ask follow-up questions when details are missing.',
-    '2. Call `list_courses` early to translate human course references into Canvas IDs before using other tools.',
+    '2. Call `list_courses` early to translate human course references into Brightspace IDs before using other tools.',
     '3. Fetch targeted data with the other tools, choosing date filters or search terms that match the learner\'s request.',
-    '4. For file requests, use folder tools to navigate structure first, then list/search files, and finally get download URLs when needed.',
+    '4. For file requests, use folder tools to navigate structure first, then list files, and finally get download URLs when needed.',
     '5. Read tool results from `structuredContent` and combine them into a concise answer grouped by course and sorted by due date.',
-    '6. Highlight overdue or at-risk work, include Canvas links when present, and suggest next actions or follow-up tools when data is missing.',
+    '6. Highlight overdue or at-risk work, include Brightspace links when present, and suggest next actions or follow-up tools when data is missing.',
     '7. If no relevant data is found, state that clearly and recommend what the learner can try next (different filters, future check-ins, etc.).',
     '',
     'Keep responses actionable and skimmable--use short paragraphs or bullet lists so the learner can plan quickly.'
   ]);
 
   return {
-    description: 'Kick-off instructions for Canvas support sessions.',
+    description: 'Kick-off instructions for Brightspace support sessions.',
     messages: [toUserMessage(text)]
   };
 }
@@ -130,7 +131,7 @@ function buildAssignmentBriefPrompt(args: {
 
   const focusLine = courseHint
     ? `Focus on the course that best matches "${courseHint}". Cross-check with \`list_courses\` and confirm with the learner if multiple matches exist.`
-    : 'Ask the learner which course to plan for if it is unclear, and confirm the Canvas course ID via `list_courses`.';
+    : 'Ask the learner which course to plan for if it is unclear, and confirm the Brightspace course ID via `list_courses`.';
 
   const text = joinLines([
     'Objective: create a concise assignment briefing for the learner.',
@@ -145,9 +146,9 @@ function buildAssignmentBriefPrompt(args: {
     'Recommended flow:',
     '1. Use `list_courses` to locate the course ID and surface the official course name/term.',
     '2. Pull the current workload with `list_assignments`, filtering by due date (`due_after`/`due_before`) or keywords when appropriate.',
-    `3. Call \`list_upcoming\` with \`days=${horizonDays}\` to capture Canvas to-do items in the same horizon and merge them with assignments.`,
+    `3. Call \`list_upcoming\` with \`days=${horizonDays}\` to capture Brightspace assignments in the same horizon and merge them with assignments.`,
     '4. Use `get_assignment` on any item where you need the full prompt, submission status, or rubric context before making recommendations.',
-    '5. Summarise findings by due date: show status (submitted, late, missing, pending), points, and Canvas links when available.',
+    '5. Summarise findings by due date: show status, points, and Brightspace links when available.',
     '6. Highlight urgent tasks, blockers, or missing data, and suggest follow-up actions the learner can take immediately.',
     '',
     'Answer format suggestion:',
@@ -158,7 +159,7 @@ function buildAssignmentBriefPrompt(args: {
   ]);
 
   return {
-    description: 'Playbook for gathering and presenting Canvas assignments.',
+    description: 'Playbook for gathering and presenting Brightspace assignments.',
     messages: [toUserMessage(text)]
   };
 }
@@ -171,7 +172,7 @@ function buildAnnouncementDigestPrompt(args: {
   const since = sanitize(args.since);
 
   const courseLine = courseHint
-    ? `Prioritise announcements from courses matching "${courseHint}". Use \`list_courses\` to map the hint to Canvas IDs and confirm with the learner when ambiguous.`
+    ? `Prioritise announcements from courses matching "${courseHint}". Use \`list_courses\` to map the hint to Brightspace IDs and confirm with the learner when ambiguous.`
     : 'If no course is specified, explain that you will check recent announcements from all accessible courses and invite the learner to narrow it down.';
 
   const sinceLine = since
@@ -179,13 +180,13 @@ function buildAnnouncementDigestPrompt(args: {
     : 'If no timeframe is supplied, default to the last 14 days and confirm that window with the learner.';
 
   const text = joinLines([
-    'Objective: provide an actionable digest of recent Canvas announcements.',
+    'Objective: provide an actionable digest of recent Brightspace announcements.',
     '',
     courseLine,
     sinceLine,
     '',
     'Recommended flow:',
-    '1. Call `list_courses` when you need to translate user-friendly course names into Canvas IDs.',
+    '1. Call `list_courses` when you need to translate user-friendly course names into Brightspace IDs.',
     '2. Fetch announcements with `list_announcements`, supplying `course_id` when the learner only wants one course and the `since` parameter when a timeframe is known.',
     '3. Order announcements from newest to oldest. Extract titles, posted_at timestamps, author (if provided), and key takeaways.',
     '4. Note any embedded links or follow-up actions, and mention when no announcements were found for the requested window.',
@@ -193,7 +194,7 @@ function buildAnnouncementDigestPrompt(args: {
   ]);
 
   return {
-    description: 'Guidance for assembling Canvas announcement summaries.',
+    description: 'Guidance for assembling Brightspace announcement summaries.',
     messages: [toUserMessage(text)]
   };
 }
@@ -206,42 +207,38 @@ function buildFileAccessPrompt(args: {
   const fileType = sanitize(args.file_type);
 
   const courseLine = courseHint
-    ? `Focus on files from the course matching "${courseHint}". Use \`list_courses\` to identify the Canvas course ID and confirm with the learner if multiple matches exist.`
-    : 'If no course is specified, start by asking whether the learner wants to browse their personal files or course-specific files. Use `list_courses` to help them identify the right course.';
+    ? `Focus on files from the course matching "${courseHint}". Use \`list_courses\` to identify the Brightspace course ID and confirm with the learner if multiple matches exist.`
+    : 'If no course is specified, start by asking which course to browse. Use `list_courses` to help them identify the right course.';
 
   const fileTypeLine = fileType
-    ? `Filter for files related to "${fileType}". Use the search_term parameter to find matching filenames, or use content_types to filter by MIME type (e.g., "application/pdf" for PDFs, "image" for all images).`
-    : 'If no specific file type is mentioned, list all available files and let the learner browse or narrow down their search.';
+    ? `Filter for files related to "${fileType}". Use the path parameter to navigate into likely folders, then list files to find matches.`
+    : 'If no specific file type is mentioned, list all available files in the course root and let the learner browse or narrow down their search.';
 
   const text = joinLines([
-    'Objective: help the learner find and access Canvas files efficiently.',
+    'Objective: help the learner find and access Brightspace files efficiently.',
     '',
     courseLine,
     fileTypeLine,
     '',
     'Recommended flow:',
-    '1. Clarify the scope: personal files (`list_user_files`) or course files (`list_course_files`)?',
-    '2. For course files, use `list_courses` to get the course ID, then call `list_course_folders` to show the folder structure.',
-    '3. Use `list_folder_files` to browse specific folders, or search directly with `list_course_files` using search_term or content_types filters.',
-    '4. When the learner identifies a file of interest, use `get_file` to show detailed metadata (size, upload date, lock status).',
-    '5. If the learner needs to download or view the file, call `get_file_download_url` to provide a temporary signed download link.',
-    '6. Explain that download URLs expire after 10 minutes and should be used immediately, not saved for later.',
+    '1. Use `list_courses` to get the course ID, then call `list_course_folders` to show the folder structure.',
+    '2. Use `list_course_files` to browse the current folder, and pass `path` to drill into folders.',
+    '3. When the learner identifies a file of interest, use `get_file_download_url` to provide the download link.',
+    '4. Remind the learner that access is controlled by Brightspace permissions.',
     '',
     'File organization tips:',
     '- Folders often mirror course structure (e.g., "Lectures", "Assignments", "Resources")',
-    '- Use content_types to filter: "application/pdf", "image/jpeg", "video/mp4", "application/vnd.openxmlformats-officedocument.*" for Office docs',
-    '- Sort by date (`created_at` or `updated_at`) to find recent uploads, or by `name` for alphabetical browsing',
-    '- Check `locked` and `hidden` fields to inform learners about file availability',
+    '- Use folder paths to narrow the search to specific modules or weeks',
+    '- Sort your response by folder when listing many files',
     '',
     'Common patterns:',
     '- "Find the lecture slides" → search for PDFs or PowerPoint files with "lecture" or "slides" in the name',
     '- "Show me all assignment files" → browse the Assignments folder or search for files with "assignment" in the name',
-    '- "What files were posted this week?" → filter by `created_at` or `updated_at` with recent dates',
     '- "Download the syllabus" → search for "syllabus", get file details, then provide download URL'
   ]);
 
   return {
-    description: 'Playbook for helping learners locate and access Canvas files.',
+    description: 'Playbook for helping learners locate and access Brightspace files.',
     messages: [toUserMessage(text)]
   };
 }

@@ -1,234 +1,145 @@
-# Canvas MCP Server
+# Brightspace MCP Server
 
-Local Model Context Protocol (MCP) server that exposes Canvas LMS read-only tooling over HTTP/SSE (and optional stdio) for agent integrations. The server provides authenticated access to courses, assignments, announcements, and upcoming to-do work using the Canvas REST API, with pagination, retries, and structured JSON responses.
+Local Model Context Protocol (MCP) server that exposes USC Brightspace read-only tooling over HTTP/SSE (and optional stdio) for agent integrations. The server provides authenticated access to courses, assignments, announcements, materials, and course files using the D2L Valence APIs, with pagination, retries, and structured JSON responses.
 
-## Features
+**Key features**
+- Brightspace client with retries, timeouts, and both Valence pagination styles.
+- HTTP/SSE transport with bearer auth, rate limiting, and session cleanup.
+- JSON console logging with request metadata and Brightspace status codes.
+- Consistent MCP error mapping for Brightspace 401/403/404/429/5xx responses.
+- Pre-built MCP prompts for common Brightspace workflows (quickstart, assignment planning, announcements, file access).
 
-- HTTP+SSE transport at `/mcp` with static bearer authentication
-- Optional stdio transport for local testing (`--stdio`)
-- Canvas client with:
-  - Automatic bearer or OAuth2 token handling (refresh on 401)
-  - Exponential backoff with jitter (up to 3 attempts) for 429/5xx
-  - Link header pagination (`per_page=100`)
-  - Configurable request timeout (default 15s)
-  - Request ID propagation for structured errors & logging
-- Tools returning strongly typed JSON payloads:
-  - `list_courses`
-  - `list_assignments`
-  - `get_assignment`
-  - `list_announcements`
-  - `list_upcoming`
-  - `list_user_files`
-  - `list_course_files`
-  - `list_folder_files`
-  - `get_file`
-  - `get_file_download_url`
-  - `list_user_folders`
-  - `list_course_folders`
-  - `get_folder`
-- JSON console logging with request metadata and Canvas status codes
-- Consistent MCP error mapping for Canvas 401/403/404/429/5xx responses
-- Pre-built MCP prompts for common Canvas workflows (quickstart, assignment planning, announcements)
+## Quick start
 
-## Getting Started
-
-### Prerequisites
-
-- Node.js 18.17+ or 20+
-
-### Install
+1. Install dependencies:
 
 ```bash
 npm install
-cp .env.example .env
-# populate .env with Canvas credentials and MCP_BEARER
 ```
 
-Required environment variables (see `.env.example`):
-
-- `CANVAS_BASE_URL` – e.g. `https://q.utoronto.ca`
-- Authentication: either
-  - `CANVAS_PAT` (personal access token), **or**
-  - OAuth2: `CANVAS_CLIENT_ID`, `CANVAS_CLIENT_SECRET`, `CANVAS_REFRESH_TOKEN` (+ optional `CANVAS_ACCESS_TOKEN`)
-- `MCP_BEARER` – shared secret for HTTP clients hitting `/mcp`
-- `CANVAS_TIMEZONE` – (optional) IANA timezone name for timestamp conversion (e.g. `America/Toronto`, `America/New_York`). Defaults to `UTC` if not set.
-- `CANVAS_HTTP_TIMEOUT_MS` – (optional) request timeout in milliseconds for Canvas HTTP calls. Defaults to `15000` and must be between `1000` and `120000`.
-- `MCP_RATE_LIMIT_WINDOW_MS` – rate limit window for `/mcp` (ms, default `60000`)
-- `MCP_RATE_LIMIT_MAX` – max `/mcp` requests per window (default `30`, set `0` to disable)
-- `MCP_MESSAGES_RATE_LIMIT_WINDOW_MS` – rate limit window for `/messages` (ms, default `60000`)
-- `MCP_MESSAGES_RATE_LIMIT_MAX` – max `/messages` requests per window (default `120`, set `0` to disable)
-- `MCP_SESSION_TTL_MS` – idle session TTL before cleanup (ms, default `900000`)
-- `MCP_SESSION_CLEANUP_INTERVAL_MS` – cleanup sweep interval (ms, default `60000`)
-- `MCP_MAX_SESSIONS` – optional cap for concurrent SSE sessions (unset to disable)
-- `MCP_SSE_HEARTBEAT_MS` – SSE keepalive interval (ms, default `25000`, set `0` to disable)
-
-### Run the server
-
-#### Development (watch mode)
+2. Populate `.env` with Brightspace credentials and `MCP_BEARER`:
 
 ```bash
-npm run dev
+cp .env.example .env
 ```
 
-#### Production build
+3. Start the server:
 
 ```bash
 npm run build
-npm start
+node dist/index.js
 ```
 
-Optional stdio transport (useful with `claude-dev` or MCP-compatible CLIs):
+Optional stdio transport:
 
 ```bash
-npm run dev -- --stdio
-# or
 node dist/index.js --stdio
 ```
 
-By default the HTTP server listens on port `3333`. Override with `PORT=4000 npm run dev`.
+## Environment variables
 
-### Health & Auth
+Required:
+- `BRIGHTSPACE_BASE_URL`
+- `MCP_BEARER`
+- Either `BRIGHTSPACE_ACCESS_TOKEN` OR the OAuth refresh trio (`BRIGHTSPACE_CLIENT_ID`, `BRIGHTSPACE_CLIENT_SECRET`, `BRIGHTSPACE_REFRESH_TOKEN`)
 
-- `GET /healthz` → `{ "ok": true }`
-- All `/mcp` and `/messages` requests must send `Authorization: Bearer <MCP_BEARER>`
+Optional Brightspace:
+- `BRIGHTSPACE_AUTH_HOST` (default `https://auth.brightspace.com`)
+- `BRIGHTSPACE_LP_VERSION` (default `1.49`)
+- `BRIGHTSPACE_LE_VERSION` (default `1.82`)
+- `BRIGHTSPACE_TIMEZONE` (default `UTC`)
+- `BRIGHTSPACE_HTTP_TIMEOUT_MS` (default `15000`, min `1000`, max `120000`)
 
-## Tool Reference
+Optional MCP server:
+- `MCP_RATE_LIMIT_WINDOW_MS`, `MCP_RATE_LIMIT_MAX`
+- `MCP_MESSAGES_RATE_LIMIT_WINDOW_MS`, `MCP_MESSAGES_RATE_LIMIT_MAX`
+- `MCP_SESSION_TTL_MS`, `MCP_SESSION_CLEANUP_INTERVAL_MS`, `MCP_MAX_SESSIONS`, `MCP_SSE_HEARTBEAT_MS`
 
-Each tool returns JSON via `structuredContent` (schema enforced with Zod).
+## Tools
 
-### Course & Assignment Tools
+Tool names and payloads are kept as close as practical to the original Canvas MCP schema, while mapped to Brightspace endpoints.
 
-| Tool | Input | Output |
-| ---- | ----- | ------ |
-| `list_courses` | `enrollment_state?: "active" \| "completed"`, `include_past?: boolean`, `limit?: number` | `{ courses: Course[] }` |
-| `list_assignments` | `course_id: number`, optional `due_after`, `due_before` (ISO 8601), `search` | `{ assignments: Assignment[] }` |
-| `get_assignment` | `course_id: number`, `assignment_id: number` | `{ assignment: Assignment }` |
-| `list_announcements` | Optional `course_id`, optional `since` (ISO 8601) | `{ announcements: Announcement[] }` |
-| `list_upcoming` | Optional `days` (1-30, default 7), optional `max_courses` (1-100) | `{ upcoming: UpcomingItem[] }` |
+- `list_courses` → Brightspace enrollments
+- `list_assignments` → Dropbox folders
+- `get_assignment` → Dropbox folder by id
+- `list_announcements` → News items
+- `list_upcoming` → Aggregated upcoming assignments across courses
+- `list_course_materials` → Content table of contents (modules/topics)
+- `list_course_files` → Course file listing by path
+- `list_course_folders` → Course folder listing by path
+- `get_file_download_url` → Direct file download URL by path
 
-### File & Folder Tools
+### Example responses
 
-| Tool | Input | Output |
-| ---- | ----- | ------ |
-| `list_user_files` | Optional `search_term`, `content_types` (comma-separated), `sort`, `order` | `{ files: File[] }` |
-| `list_course_files` | `course_id: number`, optional `search_term`, `content_types` (comma-separated), `sort`, `order` | `{ files: File[] }` |
-| `list_folder_files` | `folder_id: number`, optional `search_term`, `content_types` (comma-separated), `sort`, `order` | `{ files: File[] }` |
-| `get_file` | `file_id: number` | `{ file: File }` |
-| `get_file_download_url` | `file_id: number`, optional `submission_id` | `{ file_id: number, download_url: string }` |
-| `list_user_folders` | _(none)_ | `{ folders: Folder[] }` |
-| `list_course_folders` | `course_id: number` | `{ folders: Folder[] }` |
-| `get_folder` | `folder_id: number` | `{ folder: Folder }` |
+Assignments:
 
-Data contracts (stable):
-
-```jsonc
-Course {
-  "id": 123,
-  "name": "ECE496",
-  "term": "Fall 2025",
-  "course_code": "ECE496H1"
-}
-
-Assignment {
-  "id": 456,
-  "course_id": 123,
-  "name": "Lab 2",
-  "due_at": "2025-10-05T23:59:00Z", // null when Canvas omits the value
-  "points": 10,
-  "html_url": "https://.../assignments/456",
-  "submission_state": "unsubmitted" // computed: unsubmitted | submitted | graded | pending_review | late | missing | excused
-}
-
-Announcement {
-  "id": 789,
-  "course_id": 123,
-  "title": "Midterm info",
-  "posted_at": "2025-10-01T14:30:00Z",
-  "html_url": "..."
-}
-
-UpcomingItem extends Assignment with { "source": "todo" | "assignment" }
-
-File {
-  "id": 1234,
-  "uuid": "abc123...",
-  "folder_id": 567,
-  "display_name": "Lecture Notes.pdf",
-  "filename": "lecture_notes.pdf",
-  "content_type": "application/pdf",
-  "url": "https://.../files/1234/download",
-  "size": 1048576, // bytes
-  "created_at": "2025-09-15T10:00:00Z",
-  "updated_at": "2025-09-15T10:00:00Z",
-  "locked": false,
-  "hidden": false,
-  "locked_for_user": false,
-  "thumbnail_url": null,
-  "mime_class": "pdf"
-}
-
-Folder {
-  "id": 567,
-  "name": "Lectures",
-  "full_name": "course files/Lectures",
-  "context_id": 123,
-  "context_type": "Course",
-  "parent_folder_id": 100,
-  "created_at": "2025-09-01T00:00:00Z",
-  "updated_at": "2025-09-15T00:00:00Z",
-  "locked": false,
-  "folders_count": 3,
-  "files_count": 15,
-  "hidden": false,
-  "locked_for_user": false,
-  "for_submissions": false
+```json
+{
+  "assignments": [
+    {
+      "id": 42,
+      "course_id": 12345,
+      "name": "Project 1",
+      "due_at": "2025-10-05T23:59:00Z",
+      "points": null,
+      "html_url": "",
+      "submission_state": "unsubmitted"
+    }
+  ]
 }
 ```
 
-`list_upcoming` merges `/users/self/todo` and upcoming assignments (bucket filter) within the requested horizon, deduplicates by assignment id, and sorts by earliest due date. Use `max_courses` to cap the number of courses scanned for assignments.
+Files:
 
-### File Download
+```json
+{
+  "files": [
+    {
+      "id": 918273,
+      "display_name": "Syllabus.pdf",
+      "filename": "Syllabus.pdf",
+      "path": "/Syllabus.pdf"
+    }
+  ]
+}
+```
 
-The `get_file_download_url` tool returns a temporary, signed URL that allows direct download of file content. This URL:
-- Is valid for a limited time (typically 10 minutes)
-- Includes authentication parameters in the URL (no additional headers needed)
-- Points directly to Canvas's file storage (usually AWS S3)
-- Should not be cached or stored long-term
+Download URL:
 
-Use this tool when you need to access the actual file content. For file metadata only (name, size, type, etc.), use `get_file` instead.
+```json
+{
+  "file_id": 918273,
+  "download_url": "https://brightspace.usc.edu/d2l/api/lp/1.49/12345/managefiles/file?path=%2FSyllabus.pdf",
+  "path": "/Syllabus.pdf"
+}
+```
 
-## Prompt Reference
+## Prompts
 
-| Prompt | Input | Purpose |
-| ------ | ----- | ------- |
-| `canvas.quickstart` | _(none)_ | Kick-off instructions that remind the model how to explore Canvas data safely with the available tools, including file access. |
-| `canvas.assignment_brief` | `course_hint?: string`, `days?: string (digits)` | Guides the model through gathering assignments and upcoming todo items for a specific course and time horizon. |
-| `canvas.announcement_digest` | `course_hint?: string`, `since?: string (ISO-8601)` | Helps the model compile a digest of recent announcements, optionally scoped to a course or timeframe. |
-| `canvas.file_access` | `course_hint?: string`, `file_type?: string` | Guides the model through locating, browsing, and accessing Canvas files. Includes tips on folder navigation, content type filtering, and download URL usage. |
+| Prompt | Args | Description |
+| --- | --- | --- |
+| `brightspace.quickstart` | _(none)_ | Kick-off instructions that remind the model how to explore Brightspace data safely with the available tools. |
+| `brightspace.assignment_brief` | `course_hint?: string`, `days?: string (digits)` | Guides the model through gathering assignments and upcoming items for a specific course and time horizon. |
+| `brightspace.announcement_digest` | `course_hint?: string`, `since?: string (ISO-8601)` | Helps the model compile a digest of recent announcements. |
+| `brightspace.file_access` | `course_hint?: string`, `file_type?: string` | Guides the model through locating and accessing Brightspace files. |
 
-## Logging & Errors
+## Logging and errors
 
-Logs are JSON documents written to stdout/stderr with fields: `tool`, `status`, `duration_ms`, `canvas_status`, `req_id`, and optional `extra_req_ids` & `error` summaries. Secrets are never logged.
+Logs are JSON documents written to stdout/stderr with fields: `tool`, `status`, `duration_ms`, `brightspace_status`, `req_id`, and optional `extra_req_ids` & `error` summaries. Secrets are never logged.
 
-Canvas errors map to MCP errors with user-facing messages:
+Brightspace errors map to MCP errors with user-facing messages:
 
-| Canvas status | Message |
-| ------------- | ------- |
-| 401/403 | `Authorization failed: check Canvas token/scopes.` |
-| 404 | `Not found: course or assignment id.` |
-| 429 | `Rate limited by Canvas; retry later.` |
-| 5xx | `Canvas temporarily unavailable.` (surfaced as HTTP 503 to the client) |
+| Brightspace status | Message |
+| --- | --- |
+| 401/403 | `Authorization failed: check Brightspace token/scopes.` |
+| 429 | `Rate limited by Brightspace; retry later.` |
+| 5xx | `Brightspace temporarily unavailable.` (surfaced as HTTP 503 to the client) |
 
-Each error includes `request_id` (Canvas `X-Request-Id`) and the last Canvas status code in MCP error `data`.
+Each error includes `request_id` (Brightspace `X-Request-Id`) and the last Brightspace status code in MCP error `data`.
 
-## Testing
+## Development
 
-- `npm run build` – type-checks & emits JS
-- `npm test` – runs the Vitest suite
-- See `TESTING.md` for the full testing guide
-
-## Next Steps
-
-- Add caching or ETag support where helpful
-- Implement write actions (submissions, comments) once scopes allow
-- Containerize via Docker for deployment
+```bash
+npm test
+npm run build
+```

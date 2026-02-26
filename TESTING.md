@@ -1,19 +1,13 @@
 # Testing
 
-## Quick Checks
+## Unit tests
 
-- `npm run build`
-- `npm test`
+Run with:
 
-## CI Workflow
+```bash
+npm test
+```
 
-GitHub Actions runs the following on every push to `main` and on pull requests:
-
-- `npm ci`
-- `npm run build`
-- `npm test`
-
-## Notes
-
-- Unit tests use Vitest and do not require Canvas credentials.
-- Integration testing against a real Canvas instance is intentionally out of CI scope.
+Notes:
+- Unit tests use Vitest and do not require Brightspace credentials.
+- Integration testing against a real Brightspace instance is intentionally out of CI scope.

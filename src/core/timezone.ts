@@ -1,9 +1,9 @@
 import { loadEnv } from './env.js';
 
-const { canvasTimezone } = loadEnv();
+const { brightspaceTimezone } = loadEnv();
 
 const dateTimeFormatter = new Intl.DateTimeFormat('en-CA', {
-  timeZone: canvasTimezone,
+  timeZone: brightspaceTimezone,
   year: 'numeric',
   month: '2-digit',
   day: '2-digit',
@@ -48,7 +48,7 @@ function partsToNumbers(parts: Intl.DateTimeFormatPart[]): {
   };
 }
 
-export function toCanvasTimezone(value: string | null | undefined): string | null | undefined {
+export function toBrightspaceTimezone(value: string | null | undefined): string | null | undefined {
   if (value == null) {
     return value;
   }

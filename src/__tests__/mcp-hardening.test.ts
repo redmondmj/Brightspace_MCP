@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('../tools/index.js', () => ({
-  registerCanvasTools: () => {}
+  registerBrightspaceTools: () => {}
 }));
 
 vi.mock('../mcp/prompts.js', () => ({
-  registerCanvasPrompts: () => {}
+  registerBrightspacePrompts: () => {}
 }));
 
 import { createRateLimiter, getExpiredSessionIds } from '../mcp/server.js';

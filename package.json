@@ -1,7 +1,7 @@
 {
-  "name": "canvas-mcp",
+  "name": "brightspace-mcp",
   "version": "0.1.0",
-  "description": "Local MCP server surfacing Canvas LMS tools over HTTP/SSE",
+  "description": "Local MCP server surfacing Brightspace LMS tools over HTTP/SSE",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
@@ -11,7 +11,8 @@
     "test": "vitest --run --passWithNoTests"
   },
   "keywords": [
-    "canvas",
+    "brightspace",
+    "d2l",
     "mcp",
     "sse"
   ],

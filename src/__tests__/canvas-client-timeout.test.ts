@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as undici from 'undici';
 
-import { CanvasClient } from '../canvas/client.js';
+import { BrightspaceClient } from '../brightspace/client.js';
 
 vi.mock('undici', async () => {
   const actual = await vi.importActual<typeof undici>('undici');
@@ -37,7 +37,7 @@ function createAbortableFetch(): any {
     });
 }
 
-describe('CanvasClient timeouts', () => {
+describe('BrightspaceClient timeouts', () => {
   beforeEach(() => {
     fetchMock.mockReset();
     vi.useFakeTimers();
@@ -59,14 +59,17 @@ describe('CanvasClient timeouts', () => {
       .mockImplementationOnce(createAbortableFetch())
       .mockResolvedValueOnce(response);
 
-    const client = new CanvasClient({
-      baseUrl: 'https://canvas.example.com',
-      pat: 'token',
+    const client = new BrightspaceClient({
+      baseUrl: 'https://brightspace.example.com',
+      authHost: 'https://auth.brightspace.com',
+      accessToken: 'token',
       maxRetries: 1,
-      httpTimeoutMs: 10
+      httpTimeoutMs: 10,
+      lpVersion: '1.49',
+      leVersion: '1.82'
     });
 
-    const resultPromise = client.get<{ ok: boolean }>('/api/v1/test');
+    const resultPromise = client.get<{ ok: boolean }>('/d2l/api/lp/1.49/test');
 
     await vi.advanceTimersByTimeAsync(15);
     await vi.advanceTimersByTimeAsync(250);
@@ -80,16 +83,19 @@ describe('CanvasClient timeouts', () => {
   it('surfaces timeout as AppError after retries are exhausted', async () => {
     fetchMock.mockImplementation(createAbortableFetch());
 
-    const client = new CanvasClient({
-      baseUrl: 'https://canvas.example.com',
-      pat: 'token',
+    const client = new BrightspaceClient({
+      baseUrl: 'https://brightspace.example.com',
+      authHost: 'https://auth.brightspace.com',
+      accessToken: 'token',
       maxRetries: 0,
-      httpTimeoutMs: 5
+      httpTimeoutMs: 5,
+      lpVersion: '1.49',
+      leVersion: '1.82'
     });
 
-    const resultPromise = client.get('/api/v1/test');
+    const resultPromise = client.get('/d2l/api/lp/1.49/test');
     const rejectionAssertion = expect(resultPromise).rejects.toMatchObject({
-      code: 'CANVAS_UNAVAILABLE',
+      code: 'BRIGHTSPACE_UNAVAILABLE',
       data: {
         details: {
           timeoutMs: 5
