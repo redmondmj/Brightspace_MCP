@@ -65,6 +65,10 @@ export const listAnnouncementsOutputSchema = z.object({
   announcements: z.array(announcementSchema)
 });
 
+export const createAnnouncementOutputSchema = z.object({
+  announcement: announcementSchema
+});
+
 export const listUpcomingOutputSchema = z.object({
   upcoming: z.array(upcomingItemSchema)
 });
@@ -79,7 +83,7 @@ export const courseMaterialTopicSchema = z.object({
   is_hidden: z.boolean().optional(),
   is_locked: z.boolean().optional(),
   is_broken: z.boolean().optional(),
-  activity_type: z.string().optional()
+  activity_type: z.union([z.string(), z.number()]).optional()
 });
 
 export type CourseMaterialTopic = z.infer<typeof courseMaterialTopicSchema>;

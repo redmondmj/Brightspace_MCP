@@ -62,7 +62,7 @@ export interface BrightspaceContentTopic {
   IsHidden?: boolean;
   IsLocked?: boolean;
   IsBroken?: boolean;
-  ActivityType?: string | null;
+  ActivityType?: string | number | null;
 }
 
 export interface BrightspaceFileSystemObject {

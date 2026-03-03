@@ -92,6 +92,21 @@ export class BrightspaceClient {
     return this.handleResponse<T>(response);
   }
 
+  async post<T>(
+    path: string,
+    body: unknown,
+    options?: BrightspaceRequestOptions
+  ): Promise<BrightspaceResult<T>> {
+    const url = this.buildUrl(path);
+    const response = await this.fetchWithRetry(url, {
+      method: 'POST',
+      body: JSON.stringify(body),
+      signal: options?.signal
+    });
+
+    return this.handleResponse<T>(response);
+  }
+
   async getPagedResultSet<T>(
     path: string,
     params?: Record<string, unknown>,
@@ -228,13 +243,17 @@ export class BrightspaceClient {
 
   private async fetchWithRetry(
     url: URL,
-    init: { method: string; signal?: AbortSignal },
+    init: { method: string; body?: string; signal?: AbortSignal },
     attempt = 0
   ): Promise<Response> {
     const headers = new Headers();
     headers.set('Accept', 'application/json');
     headers.set('User-Agent', USER_AGENT);
     headers.set('Authorization', await this.auth.getAuthorizationHeader());
+
+    if (init.body) {
+      headers.set('Content-Type', 'application/json');
+    }
 
     const timeout = this.createTimeoutSignal(init.signal);
 

@@ -16,6 +16,7 @@ import {
   getAssignmentOutputSchema,
   getFileDownloadUrlOutputSchema,
   listAnnouncementsOutputSchema,
+  createAnnouncementOutputSchema,
   listAssignmentsOutputSchema,
   listCourseMaterialsOutputSchema,
   listCoursesOutputSchema,
@@ -226,6 +227,7 @@ export function registerBrightspaceTools(server: McpServer, deps: ToolDependenci
   registerListAssignments(server, deps);
   registerGetAssignment(server, deps);
   registerListAnnouncements(server, deps);
+  registerCreateAnnouncement(server, deps);
   registerListUpcoming(server, deps);
   registerListCourseMaterials(server, deps);
   registerListCourseFiles(server, deps);
@@ -443,6 +445,59 @@ function registerListAnnouncements(server: McpServer, deps: ToolDependencies): v
             requestId: requestIds.at(-1),
             requestIds
           }
+        };
+      }
+    )
+  );
+}
+
+function registerCreateAnnouncement(server: McpServer, deps: ToolDependencies): void {
+  const inputSchema = {
+    course_id: z.number().int().nonnegative(),
+    title: z.string().trim().min(1),
+    body: z.string().trim().min(1),
+    is_published: z.boolean().optional().default(false)
+  } satisfies Record<string, z.ZodTypeAny>;
+
+  server.registerTool(
+    'create_announcement',
+    {
+      title: 'Create Announcement',
+      description: 'Create a new announcement (news item) in a Brightspace course',
+      inputSchema,
+      outputSchema: createAnnouncementOutputSchema.shape
+    },
+    wrapTool(
+      'create_announcement',
+      async (args: {
+        course_id: number;
+        title: string;
+        body: string;
+        is_published: boolean;
+      }) => {
+        const { data, status, requestId } = await deps.brightspace.post<BrightspaceNewsItem>(
+          deps.brightspace.le(`/${args.course_id}/news/`),
+          {
+            Title: args.title,
+            Body: {
+              Content: args.body,
+              Type: 'Html'
+            },
+            StartDate: null,
+            EndDate: null,
+            IsPublished: args.is_published,
+            IsPinned: false,
+            ShowOnlyInCourseOfferings: false
+          }
+        );
+
+        const payload = createAnnouncementOutputSchema.parse({
+          announcement: mapAnnouncement(data, args.course_id)
+        });
+
+        return {
+          payload,
+          meta: { status, requestId }
         };
       }
     )
