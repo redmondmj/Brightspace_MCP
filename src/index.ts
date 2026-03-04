@@ -1,4 +1,7 @@
+import { config } from 'dotenv';
 import { loadEnv } from './core/env.js';
+
+config();
 import { log } from './core/logger.js';
 import { BrightspaceClient } from './brightspace/client.js';
 import { startServer } from './mcp/server.js';
